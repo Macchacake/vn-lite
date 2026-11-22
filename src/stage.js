@@ -46,7 +46,7 @@ function createStage(script, env) {
     const segs = script.segments;
     const el = document.createElement('div');
     el.className = 'vnl-stage';
-    el.style.setProperty('--vnl-fs', S.fontSize + 'px');
+    // 字号统一走 :root --vnl-fs（settings.applyFont / 剧场菜单可实时调整）
 
     // 背景双层交叉淡出
     const bgA = document.createElement('div'); bgA.className = 'vnl-bg';
@@ -260,7 +260,7 @@ function createStage(script, env) {
     setScene(script.scene || '室内');
     if (script.bgm) bgm.setMood(script.bgm);
 
-    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, dispose() { state.disposed = true; stopTyper(); el.remove(); } };
+    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, get _ended() { return state.ended; }, dispose() { state.disposed = true; stopTyper(); el.remove(); } };
 }
 
 // ---------- 挂载到消息 ----------

@@ -193,8 +193,8 @@
     z-index: 6;
 }
 .vnl-btn {
-    width: 30px;
-    height: 30px;
+    width: 38px;
+    height: 38px;
     border-radius: 50%;
     background: rgba(13, 16, 26, 0.72);
     color: #cdd6ea;
@@ -203,9 +203,12 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 15px;
     line-height: 1;
     padding: 0;
+    flex: 0 0 auto;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 .vnl-btn:active { background: rgba(90, 120, 180, 0.4); }
 
@@ -223,9 +226,12 @@
     color: #cfe0ff;
     border: 1px solid rgba(120, 160, 230, 0.4);
     border-radius: 14px;
-    font-size: 12px;
-    padding: 4px 14px;
+    font-size: 14px;
+    padding: 8px 18px;
+    min-height: 36px;
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 /* ---------- 选项 / 小游戏 ---------- */
@@ -241,11 +247,14 @@
     color: #e8eefb;
     border: 1px solid rgba(120, 160, 230, 0.45);
     border-radius: 10px;
-    padding: 9px 12px;
-    font-size: 14px;
+    padding: 11px 12px;
+    min-height: 44px;
+    font-size: 15px;
     cursor: pointer;
     text-align: center;
     transition: background 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 .vnl-choice-btn:active, .vnl-choice-btn.picked {
     background: rgba(74, 123, 200, 0.45);
@@ -285,45 +294,134 @@
     padding-bottom: 4px;
 }
 
-/* ---------- 全屏剧场 ---------- */
+/* ---------- 全屏剧场（移动端优先：dvh 动态视口 + flex 自适应） ---------- */
 .vnl-theater {
     position: fixed;
     inset: 0;
-    z-index: 99999;
-    background: rgba(3, 4, 8, 0.97);
+    width: 100vw;
+    height: 100vh;      /* 老浏览器回退 */
+    height: 100dvh;     /* 手机动态视口：排除地址栏，保证整屏可见 */
+    z-index: 2147483000;
+    background: #030408;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-.vnl-theater .vnl-stage {
-    height: min(100vh - 84px, 178vw);
-    width: auto;
-    max-width: 100vw;
-    aspect-ratio: 9 / 16;
-    margin: 0;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
 }
 .vnl-theater-head {
-    width: 100%;
-    max-width: 480px;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
+    gap: 8px;
+    padding: 8px 10px;
     color: #cdd6ea;
     font-size: 14px;
 }
 .vnl-theater-title {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     opacity: 0.85;
 }
-.vnl-theater-foot {
-    color: #7d8aa5;
-    font-size: 12px;
-    padding: 8px 0 4px;
+/* 剧场顶栏按钮：44px 大触控目标 */
+.vnl-theater-head .vnl-btn {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    font-size: 19px;
+}
+.vnl-stage-slot {
+    flex: 1 1 auto;
+    min-height: 0;       /* 关键：允许子元素收缩，配合 height:100% */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+}
+.vnl-theater .vnl-stage {
+    height: 100%;
+    width: auto;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: 9 / 16;
+    margin: 0;
+    border-radius: 10px;
+}
+
+/* ---------- 游戏菜单（大按钮，全部可点） ---------- */
+.vnl-menu {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    background: rgba(3, 5, 10, 0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+.vnl-menu.vnl-menu-on { display: flex; }
+.vnl-menu-panel {
+    width: min(88vw, 340px);
+    background: rgba(16, 20, 34, 0.96);
+    border: 1px solid rgba(130, 160, 220, 0.35);
+    border-radius: 16px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+}
+.vnl-menu-title {
+    color: #cfe0ff;
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+    padding: 2px 0 6px;
+    letter-spacing: 0.12em;
+}
+.vnl-menu-btn {
+    min-height: 48px;
+    padding: 12px 18px;
+    font-size: 16px;
+    color: #e8eefb;
+    background: rgba(38, 48, 76, 0.85);
+    border: 1px solid rgba(120, 160, 230, 0.4);
+    border-radius: 12px;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+.vnl-menu-btn:active { background: rgba(74, 123, 200, 0.55); }
+.vnl-menu-danger {
+    background: rgba(120, 40, 40, 0.55);
+    border-color: rgba(220, 110, 110, 0.5);
+    color: #ffd9d9;
+}
+.vnl-menu-danger:active { background: rgba(180, 60, 60, 0.7); }
+.vnl-menu-row { display: flex; gap: 10px; }
+.vnl-menu-half { flex: 1; }
+
+/* 剧场全部演完的结束面板 */
+.vnl-theater-endbox {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+    width: min(80vw, 300px);
+}
+.vnl-theater-endtext {
+    color: #cdd6ea;
+    font-size: 18px;
+    text-align: center;
+    padding: 18px 0 6px;
+    letter-spacing: 0.2em;
 }
 
 /* ---------- 设置面板 ---------- */
