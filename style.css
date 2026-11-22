@@ -1,0 +1,367 @@
+/* ============================================
+   文游Lite (VN-Lite) — 轻量视觉小说界面
+   性能原则：只用 opacity/transform 过渡，无 backdrop-filter，
+   无 JS 粒子，打字机同一时刻只跑一个。
+   ============================================ */
+
+/* ---------- 舞台 ---------- */
+.vnl-stage {
+    position: relative;
+    width: 100%;
+    max-width: 430px;
+    aspect-ratio: 9 / 16;
+    margin: 8px auto;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #0b0e16;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* 开启 VN 时隐藏消息原有内容（只动显示层） */
+.mes_text.vnl-active > *:not(.vnl-stage) {
+    display: none !important;
+}
+
+.vnl-bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    transition: opacity 0.8s ease;
+    z-index: 1;
+}
+
+/* ---------- 天气氛围（纯 CSS，极轻量） ---------- */
+.vnl-weather {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+}
+.vnl-weather.rain {
+    background-image: repeating-linear-gradient(78deg,
+        transparent 0 16px,
+        rgba(190, 215, 255, 0.22) 16px 17.5px,
+        transparent 17.5px 30px);
+    background-size: 120px 300px;
+    animation: vnl-rain 0.55s linear infinite;
+}
+@keyframes vnl-rain {
+    from { background-position: 0 0; }
+    to   { background-position: -46px 300px; }
+}
+.vnl-weather.snow {
+    background-image:
+        radial-gradient(circle, rgba(255,255,255,0.85) 1.4px, transparent 2px),
+        radial-gradient(circle, rgba(255,255,255,0.55) 1.1px, transparent 1.8px);
+    background-size: 52px 52px, 34px 34px;
+    animation: vnl-snow 7s linear infinite;
+}
+@keyframes vnl-snow {
+    from { background-position: 0 0, 0 0; }
+    to   { background-position: 14px 320px, -10px 320px; }
+}
+.vnl-weather.night::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(1.5px 1.5px at 12% 18%, #fff8, transparent 60%),
+        radial-gradient(1.2px 1.2px at 68% 10%, #fff7, transparent 60%),
+        radial-gradient(1.6px 1.6px at 40% 26%, #fff6, transparent 60%),
+        radial-gradient(1.1px 1.1px at 84% 32%, #fff5, transparent 60%),
+        radial-gradient(1.3px 1.3px at 24% 40%, #fff5, transparent 60%);
+}
+
+/* ---------- 立绘 ---------- */
+.vnl-sprites {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 25%;
+    height: 58%;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 3%;
+    padding: 0 4%;
+    z-index: 3;
+    pointer-events: none;
+}
+.vnl-sprite {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0.5;
+    transition: opacity 0.45s ease;
+}
+.vnl-sprite.active { opacity: 1; }
+.vnl-sprite img {
+    height: calc(100% - 20px);
+    max-width: 100%;
+    object-fit: contain;
+    filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.45));
+}
+.vnl-sprite .vnl-sname {
+    font-size: 11px;
+    color: #e8ecf5;
+    background: rgba(10, 12, 20, 0.75);
+    border: 1px solid rgba(180, 200, 240, 0.18);
+    padding: 1px 10px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+/* ---------- 对话框 ---------- */
+.vnl-dialog {
+    position: absolute;
+    left: 3%;
+    right: 3%;
+    bottom: 3%;
+    min-height: 21%;
+    background: rgba(13, 16, 26, 0.88);
+    border: 1px solid rgba(160, 180, 220, 0.22);
+    border-radius: 12px;
+    padding: 12px 12px 16px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+}
+.vnl-name {
+    position: absolute;
+    top: -12px;
+    left: 12px;
+    background: linear-gradient(135deg, #3d5a99, #4a7bc8);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 12px;
+    border-radius: 10px;
+    letter-spacing: 0.05em;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.vnl-name.vnl-user { background: linear-gradient(135deg, #7a5a8f, #8f6fa8); }
+.vnl-text {
+    flex: 1;
+    color: #f2f5fa;
+    font-size: var(--vnl-fs, 15px);
+    line-height: 1.7;
+    min-height: 3.2em;
+    word-break: break-word;
+}
+.vnl-text.vnl-narr {
+    color: #b9c2d4;
+    font-style: italic;
+}
+.vnl-cur {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: #9db8e8;
+    margin-left: 2px;
+    vertical-align: -0.15em;
+    animation: vnl-blink 1s steps(1) infinite;
+}
+@keyframes vnl-blink { 50% { opacity: 0; } }
+.vnl-next-hint {
+    position: absolute;
+    right: 10px;
+    bottom: 6px;
+    color: #8fa3c8;
+    font-size: 12px;
+    animation: vnl-bounce 1.4s ease-in-out infinite;
+}
+@keyframes vnl-bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(3px); }
+}
+
+/* ---------- 舞台内控制按钮 ---------- */
+.vnl-ctrl {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+    z-index: 6;
+}
+.vnl-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: rgba(13, 16, 26, 0.72);
+    color: #cdd6ea;
+    border: 1px solid rgba(160, 180, 220, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0;
+}
+.vnl-btn:active { background: rgba(90, 120, 180, 0.4); }
+
+/* ---------- 结束行 ---------- */
+.vnl-endrow {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    align-items: center;
+    padding: 6px 0 2px;
+    margin-top: auto;
+}
+.vnl-endbtn {
+    background: rgba(74, 123, 200, 0.25);
+    color: #cfe0ff;
+    border: 1px solid rgba(120, 160, 230, 0.4);
+    border-radius: 14px;
+    font-size: 12px;
+    padding: 4px 14px;
+    cursor: pointer;
+}
+
+/* ---------- 选项 / 小游戏 ---------- */
+.vnl-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+    padding: 2px 2px 6px;
+}
+.vnl-choice-btn {
+    background: rgba(20, 26, 42, 0.9);
+    color: #e8eefb;
+    border: 1px solid rgba(120, 160, 230, 0.45);
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.2s;
+}
+.vnl-choice-btn:active, .vnl-choice-btn.picked {
+    background: rgba(74, 123, 200, 0.45);
+    border-color: #7ea6ee;
+}
+.vnl-qte-bar {
+    position: relative;
+    height: 26px;
+    margin: 10px 6px 4px;
+    background: rgba(20, 26, 42, 0.9);
+    border: 1px solid rgba(120, 160, 230, 0.4);
+    border-radius: 13px;
+    overflow: hidden;
+}
+.vnl-qte-zone {
+    position: absolute;
+    left: 42%;
+    width: 16%;
+    top: 0;
+    bottom: 0;
+    background: rgba(90, 200, 140, 0.25);
+    border-left: 1px solid rgba(120, 230, 170, 0.6);
+    border-right: 1px solid rgba(120, 230, 170, 0.6);
+}
+.vnl-qte-mark {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    background: #ffd36b;
+    box-shadow: 0 0 6px #ffd36b;
+}
+.vnl-qte-tip {
+    text-align: center;
+    color: #9fb2d6;
+    font-size: 12px;
+    padding-bottom: 4px;
+}
+
+/* ---------- 全屏剧场 ---------- */
+.vnl-theater {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: rgba(3, 4, 8, 0.97);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.vnl-theater .vnl-stage {
+    height: min(100vh - 84px, 178vw);
+    width: auto;
+    max-width: 100vw;
+    aspect-ratio: 9 / 16;
+    margin: 0;
+}
+.vnl-theater-head {
+    width: 100%;
+    max-width: 480px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    color: #cdd6ea;
+    font-size: 14px;
+}
+.vnl-theater-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+.vnl-theater-foot {
+    color: #7d8aa5;
+    font-size: 12px;
+    padding: 8px 0 4px;
+}
+
+/* ---------- 设置面板 ---------- */
+.vnl-set .inline-drawer-content { font-size: 14px; }
+.vnl-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    flex-wrap: wrap;
+}
+.vnl-set-row label { flex: 1; min-width: 90px; }
+.vnl-set-row input[type="range"] { flex: 1; min-width: 120px; }
+.vnl-set small { color: #8d99ad; display: block; margin-top: 4px; }
+.vnl-map-table { width: 100%; border-collapse: collapse; margin: 6px 0; }
+.vnl-map-table td { padding: 2px; }
+.vnl-map-table input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-size: 13px;
+}
+.vnl-map-del {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(180, 70, 70, 0.25);
+    border: 1px solid rgba(220, 110, 110, 0.4);
+    color: #e8b0b0;
+    cursor: pointer;
+}
+.vnl-map-add {
+    width: 100%;
+    padding: 6px;
+    border-radius: 8px;
+    background: rgba(74, 123, 200, 0.2);
+    border: 1px dashed rgba(120, 160, 230, 0.5);
+    color: #cfe0ff;
+    cursor: pointer;
+    margin-top: 4px;
+}
