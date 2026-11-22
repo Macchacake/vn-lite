@@ -9,9 +9,24 @@ import { guessScene } from './assets.js';
 
 // ---------- 公共工具 ----------
 
+// 剥离思维链 / 推理 / OOC 等杂项（在 markdown 清理之前）
+function stripNoise(s) {
+    // 成对的思考标签：<thinking>...</thinking> 等（常见于 DeepSeek-R1 / 各类推理模型）
+    s = s.replace(/<(think|thinking|reasoning|thought|thoughts|analyze|analysis|reflection|brainstorm|scratchpad|inner_?monologue|summary)[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+    // 未闭合的思考标签：从开标签起整段丢弃（模型忘关标签时防止吞掉正文判断）
+    if (/<(think|thinking|reasoning)>/i.test(s) && !/<\/(think|thinking|reasoning)>/i.test(s)) {
+        s = s.replace(/<(?:think|thinking|reasoning)>[\s\S]*$/i, '');
+    }
+    // 首行 Reasoning: / Thinking: 段落
+    s = s.replace(/^\s*(?:Reasoning|Thinking|Thought|reasoning|thinking)[:：][^\n]*$/gm, '');
+    // OOC 备注 ((...))
+    s = s.replace(/\(\([\s\S]*?\)\)/g, '');
+    return s;
+}
+
 // 清理 markdown 噪声，保留可读文本
 function cleanText(s) {
-    return s
+    return stripNoise(s)
         .replace(/```[\s\S]*?```/g, '')      // 代码块
         .replace(/<[^>]+>/g, '')             // HTML 标签
         .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // 图片
@@ -51,7 +66,12 @@ function extractSpeaker(pre, knownNames) {
 
 // ---------- 协议标签解析 ----------
 // 兼容全角/半角括号、大小写、中英文冒号
-const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|bgm|choice|qte)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
+// 演出标签：scene/char/bgm/choice/qte
+// 游戏系统标签：stats/item/quest/aff/dice/input（RPG Maker 风格）
+const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|bgm|choice|qte|stats|item|quest|aff|dice|input)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
+
+// 任务状态词 → 统一枚举
+const QUEST_ST = { '开始': 'start', '新': 'start', 'new': 'start', '接受': 'start', '进行': 'start', '完成': 'done', 'done': 'done', '达成': 'done', '失败': 'fail', 'fail': 'fail', '放弃': 'fail' };
 
 function parseProtocol(text, knownNames) {
     const script = { mode: 'protocol', scene: null, bgm: null, segments: [] };
@@ -62,7 +82,7 @@ function parseProtocol(text, knownNames) {
         if (!line) continue;
         // 剥离行首连续标签（如 [char:xx][bgm:yy] 正文）
         let guard = 0;
-        while (guard++ < 4) {
+        while (guard++ < 6) {
             const m = line.match(TAG_LINE_RE);
             if (!m) break;
             const tag = m[1].toLowerCase();
@@ -81,6 +101,43 @@ function parseProtocol(text, knownNames) {
                 if (opts.length) script.segments.push({ t: 'choice', opts });
             } else if (tag === 'qte') {
                 if (val) script.segments.push({ t: 'qte', text: val });
+            } else if (tag === 'stats') {
+                // [stats:HP|80/100|MP|30/50|金币|120] —— 标签与值用 | 交替
+                const parts = val.split(/[|｜]/).map(x => x.trim()).filter(Boolean);
+                const items = [];
+                for (let i = 0; i + 1 < parts.length; i += 2) items.push({ label: parts[i], val: parts[i + 1] });
+                if (items.length) script.segments.push({ t: 'stats', items });
+            } else if (tag === 'item') {
+                // [item:+治疗药水x2] / [item:-铁剑]
+                const m2 = val.match(/^([+＋\-－])\s*(.+?)(?:\s*[x×](\d+))?$/);
+                if (m2) script.segments.push({ t: 'item', op: /[+＋]/.test(m2[1]) ? '+' : '-', name: m2[2].trim(), qty: m2[3] ? Number(m2[3]) : 1 });
+            } else if (tag === 'quest') {
+                // [quest:开始|任务名|描述] / [quest:完成|任务名]
+                const parts = val.split(/[|｜]/).map(x => x.trim());
+                const st = QUEST_ST[parts[0].toLowerCase()] || QUEST_ST[parts[0]] || 'start';
+                if (parts[1]) script.segments.push({ t: 'quest', st, name: parts[1], desc: parts[2] || null });
+            } else if (tag === 'aff') {
+                // [aff:角色名|+2] / [aff:角色名|-1]
+                const parts = val.split(/[|｜]/).map(x => x.trim());
+                if (parts[0]) {
+                    const d = parseInt(parts[1] || '1', 10);
+                    script.segments.push({ t: 'aff', name: parts[0], delta: isNaN(d) ? 1 : d });
+                }
+            } else if (tag === 'dice') {
+                // [dice:1d20|15|成功剧情|失败剧情] —— 掷 N 面骰，≥目标算成功
+                const parts = val.split(/[|｜]/).map(x => x.trim());
+                const m2 = (parts[0] || '').match(/^(\d*)d(\d+)$/i);
+                if (m2) script.segments.push({
+                    t: 'dice',
+                    n: Math.min(5, Math.max(1, Number(m2[1]) || 1)),
+                    faces: Number(m2[2]) || 6,
+                    target: Number(parts[1]) || 1,
+                    okText: parts[2] || null,
+                    failText: parts[3] || null,
+                });
+            } else if (tag === 'input') {
+                // [input:提示语] —— 玩家自由输入
+                if (val) script.segments.push({ t: 'input', hint: val });
             }
         }
         if (!line.trim()) continue;
@@ -93,7 +150,7 @@ function parseProtocol(text, knownNames) {
 }
 
 function hasProtocolTag(text) {
-    return /[\[【]\s*(scene|char|bgm|choice|qte)\s*[：:=]/i.test(text);
+    return /[\[【]\s*(scene|char|bgm|choice|qte|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
 }
 
 // ---------- 智能解析（零配置） ----------

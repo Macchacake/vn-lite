@@ -9,7 +9,9 @@
 import { sceneBG, weatherOf, silhouetteURI } from './assets.js';
 import { parseMessage } from './parser.js';
 import { bgm } from './bgm.js';
-import { renderChoices, renderQTE } from './minigame.js';
+import { renderChoices, renderQTE, renderDice, renderInput } from './minigame.js';
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 // ---------- 全局唯一打字机 ----------
 let _typer = null; // { stop() }
@@ -60,8 +62,10 @@ function createStage(script, env) {
     dialog.innerHTML = '<div class="vnl-name" style="display:none"></div><div class="vnl-text"></div>';
     const nameEl = dialog.querySelector('.vnl-name');
     const textEl = dialog.querySelector('.vnl-text');
+    // RPG 状态 HUD（[stats:] 驱动，常驻舞台顶部）
+    const hud = document.createElement('div'); hud.className = 'vnl-hud';
     const ctrl = document.createElement('div'); ctrl.className = 'vnl-ctrl';
-    el.append(weather, sprites, dialog, ctrl);
+    el.append(weather, sprites, hud, dialog, ctrl);
 
     const state = {
         ptr: -1,          // 已处理的 segment 下标
@@ -180,7 +184,86 @@ function createStage(script, env) {
             textEl.textContent = seg.text;
             renderQTE(textEl, () => setTimeout(() => next(), 900));
             state.interactive = true;
+        } else if (seg.t === 'stats') {
+            // RPG 状态栏：更新 HUD 并在对话框显示快照
+            nameEl.style.display = 'none';
+            renderHUD(seg.items);
+            textEl.className = 'vnl-text vnl-narr';
+            textEl.textContent = '【状态更新】';
+        } else if (seg.t === 'item') {
+            nameEl.style.display = 'none';
+            setActive(null);
+            textEl.className = 'vnl-text';
+            textEl.textContent = '';
+            const toast = document.createElement('div');
+            toast.className = 'vnl-sys vnl-item ' + (seg.op === '+' ? 'gain' : 'loss');
+            toast.textContent = (seg.op === '+' ? '🎒 获得 ' : '📦 失去 ') + seg.name + (seg.qty > 1 ? ' ×' + seg.qty : '');
+            textEl.appendChild(toast);
+        } else if (seg.t === 'quest') {
+            nameEl.style.display = 'none';
+            setActive(null);
+            textEl.className = 'vnl-text';
+            textEl.textContent = '';
+            const q = document.createElement('div');
+            q.className = 'vnl-sys vnl-quest ' + seg.st;
+            const tag = seg.st === 'done' ? '✅ 任务完成' : seg.st === 'fail' ? '💥 任务失败' : '📋 接受新任务';
+            q.innerHTML = `<div class="vnl-quest-tag">${tag}</div><div class="vnl-quest-name">${esc(seg.name)}</div>` +
+                (seg.desc ? `<div class="vnl-quest-desc">${esc(seg.desc)}</div>` : '');
+            textEl.appendChild(q);
+        } else if (seg.t === 'aff') {
+            nameEl.style.display = 'none';
+            setActive(null);
+            textEl.className = 'vnl-text';
+            textEl.textContent = '';
+            const a = document.createElement('div');
+            a.className = 'vnl-sys vnl-aff';
+            a.textContent = (seg.delta >= 0 ? '💗 ' : '💔 ') + seg.name + ' 好感度 ' + (seg.delta >= 0 ? '+' : '') + seg.delta;
+            textEl.appendChild(a);
+        } else if (seg.t === 'dice') {
+            nameEl.style.display = 'none';
+            textEl.className = 'vnl-text';
+            textEl.textContent = '';
+            renderDice(textEl, {
+                n: seg.n, faces: seg.faces, target: seg.target,
+                okText: seg.okText, failText: seg.failText,
+                send: S.sendChoice,
+                sendUserMessage: env.sendUserMessage,
+                onDone: () => next(),
+            });
+            state.interactive = true;
+        } else if (seg.t === 'input') {
+            nameEl.style.display = 'none';
+            textEl.className = 'vnl-text';
+            textEl.textContent = '';
+            renderInput(textEl, {
+                hint: seg.hint,
+                sendUserMessage: env.sendUserMessage,
+                onDone: () => next(),
+            });
+            state.interactive = true;
         }
+    }
+
+    // HUD 渲染：HP/MP 等分数值 → 血条；其他 → 数值徽章
+    function renderHUD(items) {
+        hud.innerHTML = '';
+        for (const it of items) {
+            const chip = document.createElement('div');
+            chip.className = 'vnl-hud-chip';
+            const m = /^(\d+)\s*\/\s*(\d+)$/.exec(it.val || '');
+            if (m) {
+                const cur = Number(m[1]), max = Number(m[2]);
+                const pct = Math.max(0, Math.min(100, max ? cur / max * 100 : 0));
+                const cls = /^hp$/i.test(it.label) ? ' hp' : /^mp$/i.test(it.label) ? ' mp' : '';
+                chip.innerHTML = `<span class="vnl-hud-label">${esc(it.label)}</span>` +
+                    `<span class="vnl-hud-bar"><span class="vnl-hud-fill${cls}" style="width:${pct}%"></span></span>` +
+                    `<span class="vnl-hud-num">${cur}/${max}</span>`;
+            } else {
+                chip.innerHTML = `<span class="vnl-hud-label">${esc(it.label)}</span><span class="vnl-hud-val">${esc(it.val)}</span>`;
+            }
+            hud.appendChild(chip);
+        }
+        hud.style.display = 'flex';
     }
 
     function typeOut(text, instant) {
@@ -235,6 +318,7 @@ function createStage(script, env) {
     function restart() {
         state.ptr = -1; state.ended = false; state.interactive = false;
         sprites.innerHTML = ''; state.onStage.clear();
+        hud.style.display = 'none'; hud.innerHTML = '';
         next();
     }
 
@@ -252,7 +336,7 @@ function createStage(script, env) {
     }
 
     el.addEventListener('click', e => {
-        if (e.target.closest('.vnl-btn, .vnl-endbtn, .vnl-choice-btn, .vnl-qte-bar')) return;
+        if (e.target.closest('.vnl-btn, .vnl-endbtn, .vnl-choice-btn, .vnl-qte-bar, .vnl-dice, .vnl-input')) return;
         next();
     });
 

@@ -294,6 +294,144 @@
     padding-bottom: 4px;
 }
 
+/* ---------- RPG 状态 HUD（[stats:] 常驻顶部） ---------- */
+.vnl-hud {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 54px;
+    display: none;
+    flex-wrap: wrap;
+    gap: 5px;
+    z-index: 5;
+    pointer-events: none;
+}
+.vnl-hud-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(10, 13, 22, 0.78);
+    border: 1px solid rgba(160, 180, 220, 0.22);
+    border-radius: 8px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #dbe4f5;
+}
+.vnl-hud-label { color: #9fb2d6; }
+.vnl-hud-bar {
+    display: inline-block;
+    width: 52px;
+    height: 7px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.vnl-hud-fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #4a7bc8, #6ea3e8);
+    transition: width 0.6s ease;
+}
+.vnl-hud-fill.hp { background: linear-gradient(90deg, #c85a5a, #e87b7b); }
+.vnl-hud-fill.mp { background: linear-gradient(90deg, #7a5ac8, #9b7be8); }
+.vnl-hud-num { color: #c3cee6; }
+.vnl-hud-val { color: #ffd36b; font-weight: 700; }
+
+/* ---------- 系统事件（物品 / 任务 / 好感度） ---------- */
+.vnl-sys {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 14px;
+    margin: 2px 0 4px;
+    line-height: 1.5;
+}
+.vnl-item.gain {
+    background: rgba(60, 120, 80, 0.25);
+    border: 1px solid rgba(120, 220, 160, 0.45);
+    color: #d5f5e2;
+}
+.vnl-item.loss {
+    background: rgba(140, 60, 60, 0.25);
+    border: 1px solid rgba(220, 120, 120, 0.45);
+    color: #f5d5d5;
+}
+.vnl-quest {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    background: rgba(50, 60, 110, 0.3);
+    border: 1px solid rgba(140, 160, 230, 0.45);
+    color: #dde6fb;
+}
+.vnl-quest.done { border-color: rgba(120, 220, 160, 0.5); }
+.vnl-quest.fail { border-color: rgba(220, 120, 120, 0.5); }
+.vnl-quest .vnl-quest-tag { font-size: 12px; color: #aebde8; letter-spacing: 0.08em; }
+.vnl-quest .vnl-quest-name { font-weight: 700; font-size: 15px; }
+.vnl-quest .vnl-quest-desc { font-size: 12px; color: #9fb2d6; }
+.vnl-aff {
+    justify-content: center;
+    background: rgba(150, 80, 120, 0.22);
+    border: 1px solid rgba(230, 150, 190, 0.4);
+    color: #f9dcec;
+}
+
+/* ---------- 骰子判定 ---------- */
+.vnl-dice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+}
+.vnl-dice-title { color: #cfe0ff; font-size: 13px; }
+.vnl-dice-row { display: flex; gap: 10px; }
+.vnl-die {
+    font-size: 34px;
+    line-height: 1;
+    display: inline-block;
+    color: #e8ecf5;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.vnl-die.rolling { animation: vnl-shake 0.12s linear infinite; }
+@keyframes vnl-shake {
+    0% { transform: rotate(-14deg) scale(1.08); }
+    50% { transform: rotate(10deg) scale(0.96); }
+    100% { transform: rotate(-14deg) scale(1.08); }
+}
+.vnl-dice-roll { min-width: 140px; }
+.vnl-dice-total { color: #e8eefb; font-size: 15px; }
+.vnl-dice-verdict { font-size: 16px; font-weight: 700; }
+.vnl-dice-verdict.ok { color: #7be0a2; }
+.vnl-dice-verdict.no { color: #e87b7b; }
+
+/* ---------- 自由输入 ---------- */
+.vnl-input {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+}
+.vnl-input-hint { color: #9fb2d6; font-size: 13px; }
+.vnl-input-row { display: flex; gap: 8px; }
+.vnl-input-field {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    box-sizing: border-box;
+    background: rgba(20, 26, 42, 0.9);
+    border: 1px solid rgba(120, 160, 230, 0.45);
+    border-radius: 10px;
+    color: #e8eefb;
+    font-size: 15px;
+    padding: 10px 12px;
+}
+.vnl-input-field:focus { outline: none; border-color: #7ea6ee; }
+.vnl-input-field:disabled { opacity: 0.55; }
+.vnl-input-send { flex: 0 0 auto; min-height: 44px; padding: 10px 20px; }
+
 /* ---------- 全屏剧场（移动端优先：dvh 动态视口 + flex 自适应） ---------- */
 .vnl-theater {
     position: fixed;
