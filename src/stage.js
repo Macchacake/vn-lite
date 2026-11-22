@@ -57,6 +57,7 @@ function createStage(script, env) {
     let bgFront = bgA, bgBack = bgB;
 
     const weather = document.createElement('div'); weather.className = 'vnl-weather';
+    const cgLayer = document.createElement('div'); cgLayer.className = 'vnl-cg';
     const sprites = document.createElement('div'); sprites.className = 'vnl-sprites';
     const dialog = document.createElement('div'); dialog.className = 'vnl-dialog';
     dialog.innerHTML = '<div class="vnl-name" style="display:none"></div><div class="vnl-text"></div>';
@@ -65,7 +66,7 @@ function createStage(script, env) {
     // RPG 状态 HUD（[stats:] 驱动，常驻舞台顶部）
     const hud = document.createElement('div'); hud.className = 'vnl-hud';
     const ctrl = document.createElement('div'); ctrl.className = 'vnl-ctrl';
-    el.append(weather, sprites, hud, dialog, ctrl);
+    el.append(weather, cgLayer, sprites, hud, dialog, ctrl);
 
     const state = {
         ptr: -1,          // 已处理的 segment 下标
@@ -140,6 +141,32 @@ function createStage(script, env) {
         }
     }
 
+    // --- CG 插画层（[cg:] 驱动，异步不阻塞） ---
+    function showCG(prompt) {
+        cgLayer.classList.add('vnl-cg-on');
+        textEl.className = 'vnl-text vnl-narr';
+        textEl.textContent = '（演出插画…）';
+        lastTextLen = 6;
+        const finish = (html) => {
+            if (state.disposed) return;
+            cgLayer.innerHTML = html;
+        };
+        if (S.sdOn && typeof env.sd === 'function') {
+            finish('<div class="vnl-cg-loading"><span class="vnl-cg-spin"></span>正在绘制插画…</div>');
+            env.sd(prompt).then(res => {
+                if (!res || !res.url) { finish('<div class="vnl-cg-fallback">🖼 场景插画</div>'); return; }
+                finish(`<img src="${res.url}" alt="CG" draggable="false">`);
+            }).catch(() => finish('<div class="vnl-cg-fallback">🖼 场景插画</div>'));
+        } else {
+            finish('<div class="vnl-cg-fallback">🖼 场景插画</div>');
+        }
+    }
+    function hideCG() {
+        cgLayer.classList.remove('vnl-cg-on');
+        cgLayer.innerHTML = '';
+        sprites.style.opacity = '';
+    }
+
     // --- 段落应用 ---
     function applyDir(d) {
         if (d.scene) setScene(d.scene);
@@ -149,6 +176,7 @@ function createStage(script, env) {
 
     function renderSeg(seg, instant) {
         state.interactive = false;
+        if (seg.t !== 'cg') hideCG();
         lastTextLen = (seg.text || '').length;
         if (seg.t === 'say') {
             const who = seg.who;
@@ -184,6 +212,12 @@ function createStage(script, env) {
             textEl.textContent = seg.text;
             renderQTE(textEl, () => setTimeout(() => next(), 900));
             state.interactive = true;
+        } else if (seg.t === 'cg') {
+            // [cg:prompt] — AI 生成插画，异步加载不阻塞演出
+            nameEl.style.display = 'none';
+            setActive(null);
+            sprites.style.opacity = '0';
+            showCG(seg.prompt);
         } else if (seg.t === 'stats') {
             // RPG 状态栏：更新 HUD 并在对话框显示快照
             nameEl.style.display = 'none';
@@ -318,6 +352,7 @@ function createStage(script, env) {
     function restart() {
         state.ptr = -1; state.ended = false; state.interactive = false;
         sprites.innerHTML = ''; state.onStage.clear();
+        hideCG();
         hud.style.display = 'none'; hud.innerHTML = '';
         next();
     }

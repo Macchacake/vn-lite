@@ -40,6 +40,18 @@ function openTheater(items, envFactory) {
     const slot = overlay.querySelector('.vnl-stage-slot');
     const autoBtn = overlay.querySelector('[data-act="auto"]');
 
+    // ---------- 新幕提示角标 ----------
+    const badge = document.createElement('div');
+    badge.className = 'vnl-newflash';
+    badge.textContent = '＋ 新的一幕';
+    overlay.appendChild(badge);
+    let badgeTimer = null;
+    function flashNew() {
+        badge.classList.add('vnl-newflash-on');
+        clearTimeout(badgeTimer);
+        badgeTimer = setTimeout(() => badge.classList.remove('vnl-newflash-on'), 2600);
+    }
+
     // ---------- 游戏菜单面板 ----------
     const menu = document.createElement('div');
     menu.className = 'vnl-menu';
@@ -71,6 +83,7 @@ function openTheater(items, envFactory) {
     let stage = null;
     let auto = false;
     let autoTimer = null;
+    let atEndBox = false;
     const instance = { closed: false };
 
     function load(i) {
@@ -78,11 +91,12 @@ function openTheater(items, envFactory) {
         if (stage) { stage.dispose(); stage = null; }
         idx = i;
         if (i >= items.length) {
+            atEndBox = true;
             titleEl.textContent = '—— 全部演完 ——';
             stage = null;
             const box = document.createElement('div');
             box.className = 'vnl-theater-endbox';
-            box.innerHTML = '<div class="vnl-theater-endtext">剧 场 结 束</div>';
+            box.innerHTML = '<div class="vnl-theater-endtext">等待新的剧情…</div>';
             const again = document.createElement('button');
             again.className = 'vnl-menu-btn';
             again.textContent = '↻ 从头再看';
@@ -96,11 +110,23 @@ function openTheater(items, envFactory) {
             slot.appendChild(box);
             return;
         }
+        atEndBox = false;
         titleEl.textContent = items[i].title || `第 ${i + 1} 幕`;
         stage = createStage(items[i].script, env);
         slot.appendChild(stage.el);
         stage.next();
         if (auto) scheduleAuto();
+    }
+
+    // ---------- 同层追加新幕（不退出剧场继续剧情） ----------
+    function append(script, title) {
+        if (instance.closed || !script) return false;
+        items.push({ script, title });
+        const wasOver = atEndBox || (stage && stage._ended);
+        flashNew();
+        // 当前一幕已演完/处于结尾 → 自动进入新幕；否则看完当前幕后自然衔接
+        if (wasOver) load(idx + 1);
+        return true;
     }
 
     // 自动模式：段落完成（打字结束）后延时推进
@@ -175,9 +201,12 @@ function openTheater(items, envFactory) {
 
     load(0);
     _open = {
+        items,
+        append,
         close() {
             instance.closed = true;
             clearTimeout(autoTimer);
+            clearTimeout(badgeTimer);
             document.removeEventListener('keydown', onKey);
             stopTyper();
             if (stage) stage.dispose();
@@ -194,4 +223,10 @@ function closeTheater() {
 
 function isOpen() { return !!_open; }
 
-export { openTheater, closeTheater, isOpen };
+// 剧场开着 → 追加新幕；剧场没开 → 返回 false（调用方走常规挂载）
+function appendTheater(script, title) {
+    if (!_open || _open.closed) return false;
+    return _open.append(script, title);
+}
+
+export { openTheater, closeTheater, isOpen, appendTheater };

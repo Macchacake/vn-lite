@@ -66,9 +66,9 @@ function extractSpeaker(pre, knownNames) {
 
 // ---------- 协议标签解析 ----------
 // 兼容全角/半角括号、大小写、中英文冒号
-// 演出标签：scene/char/bgm/choice/qte
+// 演出标签：scene/char/bgm/choice/qte/cg
 // 游戏系统标签：stats/item/quest/aff/dice/input（RPG Maker 风格）
-const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|bgm|choice|qte|stats|item|quest|aff|dice|input)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
+const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
 
 // 任务状态词 → 统一枚举
 const QUEST_ST = { '开始': 'start', '新': 'start', 'new': 'start', '接受': 'start', '进行': 'start', '完成': 'done', 'done': 'done', '达成': 'done', '失败': 'fail', 'fail': 'fail', '放弃': 'fail' };
@@ -101,6 +101,9 @@ function parseProtocol(text, knownNames) {
                 if (opts.length) script.segments.push({ t: 'choice', opts });
             } else if (tag === 'qte') {
                 if (val) script.segments.push({ t: 'qte', text: val });
+            } else if (tag === 'cg') {
+                // [cg:english prompt] — 演出插画（ComfyUI 生成）
+                if (val) script.segments.push({ t: 'cg', prompt: val });
             } else if (tag === 'stats') {
                 // [stats:HP|80/100|MP|30/50|金币|120] —— 标签与值用 | 交替
                 const parts = val.split(/[|｜]/).map(x => x.trim()).filter(Boolean);
@@ -150,7 +153,7 @@ function parseProtocol(text, knownNames) {
 }
 
 function hasProtocolTag(text) {
-    return /[\[【]\s*(scene|char|bgm|choice|qte|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
+    return /[\[【]\s*(scene|char|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
 }
 
 // ---------- 智能解析（零配置） ----------

@@ -15,6 +15,10 @@ const DEFAULTS = {
     historyCount: 6,    // 最近 N 条 AI 消息挂舞台
     weather: true,     // CSS 天气氛围
     maps: { chars: {}, scenes: {} },  // 角色/场景素材映射
+    // AI 绘图（ComfyUI，电脑端运行，手机填局域网地址）
+    sdOn: false,
+    sdUrl: '',          // 例：http://192.168.1.100:8188
+    sdModel: '',        // 留空自动选择
 };
 
 let S = null;             // 当前设置（extension_settings.vnLite）
@@ -72,6 +76,21 @@ function buildPanel() {
     bindCheck(wrap, '#vnl-showraw', S.showRaw, v => { S.showRaw = v; });
     bindCheck(wrap, '#vnl-sendchoice', S.sendChoice, v => { S.sendChoice = v; });
     bindCheck(wrap, '#vnl-weather', S.weather, v => { S.weather = v; });
+
+    // --- AI 绘图（ComfyUI） ---
+    const sdOn = wrap.querySelector('#vnl-sdon');
+    sdOn.checked = S.sdOn;
+    sdOn.addEventListener('change', () => { S.sdOn = sdOn.checked; save(); });
+    const sdUrl = wrap.querySelector('#vnl-sdurl');
+    sdUrl.value = S.sdUrl;
+    sdUrl.addEventListener('change', () => { S.sdUrl = sdUrl.value.trim(); save(); });
+    wrap.querySelector('#vnl-sdtest').addEventListener('click', async () => {
+        const out = wrap.querySelector('#vnl-sdtest-out');
+        out.textContent = '测试中…';
+        const { testConnection } = await import('./sd.js');
+        const model = await testConnection(S);
+        out.textContent = model ? '✓ 已连接，模型：' + model : '✗ 无法连接（检查地址、ComfyUI 是否已启动、防火墙）';
+    });
 
     // --- 素材映射编辑器 ---
     bindMapEditor(wrap, 'chars', '角色名', '立绘图片 URL（留空用剪影）');
@@ -196,6 +215,21 @@ function panelHTML() {
             <div class="vnl-set-row">
                 <label>选择题发送到聊天</label>
                 <input type="checkbox" id="vnl-sendchoice">
+            </div>
+            <hr>
+            <b>AI 绘图（CG）</b>
+            <small>需要电脑端运行 ComfyUI（--listen 模式）。开启后，AI 在重要剧情节点自动生成插画。手机使用时填写电脑的局域网地址。</small>
+            <div class="vnl-set-row">
+                <label>启用 AI 绘图</label>
+                <input type="checkbox" id="vnl-sdon">
+            </div>
+            <div class="vnl-set-row">
+                <label>ComfyUI 地址</label>
+                <input type="text" id="vnl-sdurl" placeholder="http://192.168.x.x:8188" style="flex:1">
+            </div>
+            <div class="vnl-set-row">
+                <button class="vnl-map-add" id="vnl-sdtest" style="flex:0 0 auto">测试连接</button>
+                <small id="vnl-sdtest-out" style="flex:1"></small>
             </div>
             <hr>
             <b>角色立绘映射</b>

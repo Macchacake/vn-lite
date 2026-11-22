@@ -21,7 +21,8 @@ import { groups, selected_group } from '../../../../scripts/group-chats.js';
 import * as settings from './src/settings.js';
 import { parseMessage } from './src/parser.js';
 import { bindEnvFactory, renderAll, mountOne } from './src/stage.js';
-import { openTheater, closeTheater } from './src/theater.js';
+import { openTheater, closeTheater, appendTheater } from './src/theater.js';
+import { generateCG } from './src/sd.js';
 import { bgm } from './src/bgm.js';
 import { SCENE_DEFS, EXPR_LIST } from './src/assets.js';
 
@@ -38,17 +39,18 @@ const PROTOCOL_TEXT =
     '3. 氛围明显变化时，单独一行写 [bgm:氛围]。氛围只能是：平静、欢快、紧张、悲伤、温馨、神秘\n' +
     '4. 剧情需要玩家做选择时，单独一行写 [choice:选项A|选项B|选项C]（2~4个选项），写完就停，等待玩家选择\n' +
     '5. 需要紧张刺激的瞬间，单独一行写 [qte:简短描述]\n' +
+    '6. 重要剧情节点（初遇、转折、告白、高潮等值得立绘演出的瞬间），单独一行写 [cg:english prompt]，内容为一句话的英文绘图提示词，描述画面主体、场景与氛围，例如 [cg:1girl, silver hair, standing on beach at sunset, emotional, dramatic lighting]\n' +
     '二、游戏系统标签（像 RPG 游戏一样主动运用它们）:\n' +
-    '6. 玩家状态变化时，单独一行写 [stats:HP|80/100|MP|30/50|金币|120]（标签与数值用|交替排列，分数值会显示为血条）\n' +
-    '7. 玩家获得或失去物品时，单独一行写 [item:+物品名x2] 或 [item:-物品名]\n' +
-    '8. 任务开始、完成或失败时，单独一行写 [quest:开始|任务名|简短描述]、[quest:完成|任务名] 或 [quest:失败|任务名]\n' +
-    '9. 角色对玩家好感度明显变化时，单独一行写 [aff:角色名|+2]（或 -2）\n' +
-    '10. 玩家行动成败存在悬念时（战斗、攀爬、说服、探索…），单独一行写 [dice:1d20|15|成功后的剧情|失败后的剧情]，写完就停，等待玩家掷骰\n' +
-    '11. 剧情走向应交给玩家决定时，单独一行写 [input:提示语]，写完就停，等待玩家输入\n' +
+    '7. 玩家状态变化时，单独一行写 [stats:HP|80/100|MP|30/50|金币|120]（标签与数值用|交替排列，分数值会显示为血条）\n' +
+    '8. 玩家获得或失去物品时，单独一行写 [item:+物品名x2] 或 [item:-物品名]\n' +
+    '9. 任务开始、完成或失败时，单独一行写 [quest:开始|任务名|简短描述]、[quest:完成|任务名] 或 [quest:失败|任务名]\n' +
+    '10. 角色对玩家好感度明显变化时，单独一行写 [aff:角色名|+2]（或 -2）\n' +
+    '11. 玩家行动成败存在悬念时（战斗、攀爬、说服、探索…），单独一行写 [dice:1d20|15|成功后的剧情|失败后的剧情]，写完就停，等待玩家掷骰\n' +
+    '12. 剧情走向应交给玩家决定时，单独一行写 [input:提示语]，写完就停，等待玩家输入\n' +
     '三、主持人守则：\n' +
-    '12. 对话使用「」，叙述正常书写；标签独占一行，不要放进引号内\n' +
-    '13. 除以上标签外不要输出任何其他标签、HTML 或代码块，不要输出思考过程\n' +
-    '14. 像真正的文字游戏一样推进：战斗与探索用 [dice:] 判定，奖励用 [item:]，剧情进展用 [quest:]，情感变化用 [aff:]，状态变化用 [stats:]。不要每条都堆满标签，在剧情自然的节点使用。';
+    '13. 对话使用「」，叙述正常书写；标签独占一行，不要放进引号内\n' +
+    '14. 除以上标签外不要输出任何其他标签、HTML 或代码块，不要输出思考过程\n' +
+    '15. 像真正的文字游戏一样推进：战斗与探索用 [dice:] 判定，奖励用 [item:]，剧情进展用 [quest:]，情感变化用 [aff:]，状态变化用 [stats:]，重要画面用 [cg:]。不要每条都堆满标签，在剧情自然的节点使用。';
 
 function applyProtocolInjection() {
     const S = settings.get();
@@ -112,6 +114,8 @@ function envFactory() {
         userName: name1,
         resolveChar,
         sendUserMessage,
+        // CG 绘画：每次调用取最新设置（URL/开关实时生效）
+        sd: (prompt) => generateCG(prompt, settings.get()),
         openTheater: (script) => {
             openTheater([{ script, title: name2 || '演出' }], envFactory);
         },
@@ -120,6 +124,22 @@ function envFactory() {
 
 // ---------- 渲染调度 ----------
 let generating = false;
+
+// ---------- 剧场同层追加（不退出剧场继续剧情） ----------
+let _appendedSig = '';
+function appendLatestToTheater() {
+    let last = null, lastId = -1;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (m && !m.is_user && m.mes && m.mes.trim()) { last = m; lastId = i; break; }
+    }
+    if (!last) return;
+    const sig = lastId + ':' + (last.swipe_id ?? '') + ':' + last.mes.length;
+    if (sig === _appendedSig) return; // 同一条消息（流式/重复事件）不重复追加
+    _appendedSig = sig;
+    const script = parseMessage(last.mes, getCtxInfo());
+    if (script && script.usable) appendTheater(script, name2 || '演出');
+}
 
 function safeRenderAll(autoplayLast = true) {
     try { renderAll(chat, { autoplayLast }); } catch (e) { console.warn('[VN-Lite] 渲染失败', e); }
@@ -158,23 +178,27 @@ async function init() {
     eventSource.on(event_types.GENERATION_STARTED, () => { generating = true; });
     eventSource.on(event_types.GENERATION_ENDED, () => {
         generating = false;
-        setTimeout(() => safeRenderAll(true), 400);
+        setTimeout(() => {
+            safeRenderAll(true);
+            appendLatestToTheater(); // 剧场开着 → 新回复追加为新幕
+        }, 400);
     });
 
     // 新消息（非流式 / 首条消息）
     eventSource.on(event_types.MESSAGE_RECEIVED, (id) => {
         if (generating) return; // 流式结束时由 GENERATION_ENDED 处理
-        setTimeout(() => safeMountOne(Number(id), true), 300);
+        setTimeout(() => { safeMountOne(Number(id), true); appendLatestToTheater(); }, 300);
     });
 
     // 消息编辑 / 滑动分支（swipe）
     eventSource.on(event_types.MESSAGE_UPDATED, (id) => {
-        setTimeout(() => safeMountOne(Number(id), false), 300);
+        setTimeout(() => { safeMountOne(Number(id), false); }, 300);
     });
 
     // 聊天切换：重挂最近消息（旧消息静态展示，最新一条自动演出）
     eventSource.on(event_types.CHAT_CHANGED, () => {
         closeTheater();
+        _appendedSig = '';
         setTimeout(() => safeRenderAll(true), 700);
     });
 
