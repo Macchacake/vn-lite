@@ -42,16 +42,21 @@ function candidateBases(S) {
             if (here.hostname && /^https?:$/.test(here.protocol)) {
                 // 酒馆与 ComfyUI 在同一台电脑 / 同一主机时最常见
                 add(here.protocol + '//' + here.hostname + ':8188');
+                add(here.protocol + '//' + here.hostname + ':8189');
             }
             if (here.hostname === '127.0.0.1' || here.hostname === 'localhost') {
                 add('http://127.0.0.1:8188');
+                add('http://127.0.0.1:8189');
                 add('http://localhost:8188');
+                add('http://localhost:8189');
             }
         } catch { /* location 不可用时忽略 */ }
     }
 
     add('http://127.0.0.1:8188');
+    add('http://127.0.0.1:8189');
     add('http://localhost:8188');
+    add('http://localhost:8189');
     return out;
 }
 
