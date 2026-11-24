@@ -194,13 +194,35 @@ function pushSpeech(script, line, knownNames, fallbackSpeaker) {
     }
 }
 
+// 智能模式兜底：识别结尾的「选项列表」，转成可点选项
+// 支持 1. / 1、/ 1) / A. / - / * / • 等常见列表格式，且必须连续出现 2 条以上
+const OPT_LINE_RE = /^\s*(?:([1-9１-９]|[A-Da-d])\s*[.、)．:：]\s*|[-*•·]\s*)(.{1,40})$/;
+const OPT_LABEL_RE = /^(选项|你的选择|请选择|如何行动|你要怎么做|选择|下一步)[：:]?$/;
+
+function splitTrailingOptions(lines) {
+    const options = [];
+    let cut = lines.length;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const m = OPT_LINE_RE.exec(lines[i]);
+        if (!m) break;
+        options.unshift(m[2].trim());
+        cut = i;
+    }
+    if (options.length < 2) return { options: [], rest: lines };
+    const rest = lines.slice(0, cut);
+    while (rest.length && OPT_LABEL_RE.test(rest[rest.length - 1].trim())) rest.pop();
+    return { options, rest };
+}
+
 function parseSmart(text, knownNames) {
     const script = { mode: 'smart', scene: null, bgm: null, segments: [] };
     const cleaned = cleanText(text);
     if (!cleaned.trim()) return script;
     script.scene = guessScene(cleaned);
     script.bgm = guessMood(cleaned);
-    const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    let lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    const tail = splitTrailingOptions(lines);
+    lines = tail.rest;
     let lastSpeaker = null;
     for (const line of lines) {
         // "名字：对白" 无引号格式（仅已知角色名）
@@ -234,6 +256,10 @@ function parseSmart(text, knownNames) {
         } else {
             script.segments.push({ t: 'narr', text: line });
         }
+    }
+    // 结尾的选项列表 → 可点选项
+    if (tail.options.length >= 2) {
+        script.segments.push({ t: 'choice', opts: tail.options.slice(0, 4) });
     }
     return script;
 }

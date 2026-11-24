@@ -33,12 +33,63 @@ function openTheater(items, envFactory, opts = {}) {
             <button class="vnl-btn" data-act="ff" title="快进到结尾">⏭</button>
             <button class="vnl-btn" data-act="close" title="退出剧场">✕</button>
         </div>
-        <div class="vnl-stage-slot"></div>`;
+        <div class="vnl-stage-slot"></div>
+        <div class="vnl-composer">
+            <input class="vnl-composer-input" type="text" autocomplete="off"
+                   enterkeyhint="send" placeholder="输入你的行动…">
+            <button class="vnl-composer-send" type="button">发送</button>
+        </div>`;
     document.body.appendChild(overlay);
 
     const titleEl = overlay.querySelector('.vnl-theater-title');
     const slot = overlay.querySelector('.vnl-stage-slot');
     const autoBtn = overlay.querySelector('[data-act="auto"]');
+    const composerEl = overlay.querySelector('.vnl-composer');
+    const cInput = overlay.querySelector('.vnl-composer-input');
+    const cSend = overlay.querySelector('.vnl-composer-send');
+
+    // ---------- 常驻输入条：任何模式下都能直接打字推进 ----------
+    let waiting = false;
+    let waitTimer = null;
+
+    function setWaiting(on) {
+        waiting = on;
+        composerEl.classList.toggle('vnl-composer-wait', on);
+        cInput.disabled = on;
+        cSend.disabled = on;
+        cSend.textContent = on ? '…' : '发送';
+    }
+
+    function submitComposer() {
+        const text = String(cInput.value || '').trim();
+        if (!text || waiting) return;
+        cInput.value = '';
+        setWaiting(true);
+        try {
+            env.sendUserMessage(text);
+        } catch (e) {
+            console.warn('[VN-Lite] 发送输入失败', e);
+            setWaiting(false);
+            return;
+        }
+        // 收到新的一幕会自动解锁；万一没收到，60 秒后也解锁
+        clearTimeout(waitTimer);
+        waitTimer = setTimeout(() => setWaiting(false), 60000);
+    }
+
+    composerEl.addEventListener('click', e => e.stopPropagation());
+    cSend.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        submitComposer();
+    });
+    cInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            submitComposer();
+        }
+    });
 
     // ---------- 新幕提示角标 ----------
     const badge = document.createElement('div');
@@ -169,6 +220,9 @@ function openTheater(items, envFactory, opts = {}) {
         items.push({ script, title });
         const wasOver = atEndBox || (stage && stage._ended);
         flashNew();
+        // 新的一幕到了 → 解锁输入条
+        clearTimeout(waitTimer);
+        setWaiting(false);
         // 当前一幕已演完/处于结尾 → 自动进入新幕；否则看完当前幕后自然衔接
         if (wasOver) load(atEndBox ? items.length - 1 : idx + 1);
         return true;
@@ -261,6 +315,7 @@ function openTheater(items, envFactory, opts = {}) {
             instance.closed = true;
             clearTimeout(autoTimer);
             clearTimeout(badgeTimer);
+            clearTimeout(waitTimer);
             document.removeEventListener('keydown', onKey);
             stopTyper();
             if (stage) stage.dispose();
