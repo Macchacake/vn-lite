@@ -150,22 +150,24 @@
 .vnl-name.vnl-user { background: linear-gradient(135deg, #7a5a8f, #8f6fa8); }
 .vnl-text {
     flex: 1;
-    color: #f2f5fa;
-    font-size: var(--vnl-fs, 15px);
-    line-height: 1.7;
+    color: #f6f8fc;
+    font-size: var(--vnl-fs, 17px);
+    line-height: 1.8;
     min-height: 3.2em;
     word-break: break-word;
 }
+/* 旁白用正常体 + 更高对比度。中文斜体是假斜，笔画发虚、很难读，
+   真机上「旁白看不清」大半是这个 italic 造成的。改用颜色/前缀区分即可。 */
 .vnl-text.vnl-narr {
-    color: #b9c2d4;
-    font-style: italic;
+    color: #d5dced;
+    font-style: normal;
 }
-/* 心声：比旁白更淡、带一道左侧竖线，和「说出口的对白」区分开 */
+/* 心声：偏冷蓝 + 左侧竖线，和说出口的对白区分开；不斜体 */
 .vnl-text.vnl-inner {
-    color: #9fb0cc;
-    font-style: italic;
-    opacity: 0.95;
-    border-left: 2px solid rgba(159, 176, 204, 0.45);
+    color: #b9c8e4;
+    font-style: normal;
+    opacity: 0.97;
+    border-left: 2px solid rgba(159, 176, 204, 0.6);
     padding-left: 10px;
     margin-left: 2px;
 }

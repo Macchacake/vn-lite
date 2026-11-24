@@ -80,8 +80,19 @@ function cacheOf(kind) {
 }
 
 export function viewUrl(rec) {
-    if (!rec || !rec.base || !rec.filename) return null;
-    return rec.base + '/view?filename=' + encodeURIComponent(rec.filename) +
+    if (!rec || !rec.filename) return null;
+    // 缓存里记的是生成当时的 base。trycloudflare 每次重启都会换域名，
+    // 旧 base 一失效，图就全变白/黑。这里在取图时实时换到当前 sdUrl：
+    // 图片文件还在同一台 ComfyUI 上，只要 base 指向它就能取回。
+    let base = rec.base;
+    const cur = String((S && S.sdUrl) || '').replace(/\/+$/, '');
+    if (cur && base && base !== cur) {
+        // 只在「旧地址是隧道 / 本机地址」时迁移，避免把用户手动指向别处的图也改掉
+        const isTunnelish = /trycloudflare\.com|localhost|127\.0\.0\.1|:\d{4,5}/i.test(base);
+        if (isTunnelish) base = cur;
+    }
+    if (!base) return null;
+    return base + '/view?filename=' + encodeURIComponent(rec.filename) +
         '&subfolder=' + encodeURIComponent(rec.subfolder || '') +
         '&type=' + encodeURIComponent(rec.type || 'output');
 }

@@ -23,6 +23,7 @@ import * as settings from './src/settings.js';
 import * as art from './src/art.js';
 import * as gallery from './src/gallery.js';
 import { parseMessage, resetLearned } from './src/parser.js';
+import * as looks from './src/looks.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
 import { buildProtocol } from './src/protocol.js';
 import { bgm } from './src/bgm.js';
@@ -129,7 +130,23 @@ async function generateLooks(onlyNames = null) {
     let ok = 0;
     for (const c of chars) {
         if (S.artPrompts[c.name] && S.lookAuto[c.name] !== true) continue;  // 用户写过的跳过
+
+        // 第一步（同步兜底）：直接从角色卡抽外观。
+        // 关键：以前这一步全押在 LLM 上，手机端 LLM 没配好/接口一变就全军覆没，
+        // artPrompts 空 → prefetch 不画 → 满屏剪影。先把卡里写的外观落地，
+        // 立绘立刻能生成；LLM 只是后面用来「润色」，不再是唯一来源。
+        const fallback = looks.looksFromCard(c);
+        if (fallback) {
+            S.artPrompts[c.name] = fallback;
+            S.lookAuto[c.name] = true;
+            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
+            ok++;
+        }
+
+        // 第二步（可选润色）：让 LLM 写更完整的标签；失败也不影响上一步的兜底。
+        // 新版酒馆 generateQuietPrompt 用对象参数，这里两种写法都兼容。
         const desc = [c.description, c.personality, c.scenario].filter(Boolean).join('\n').slice(0, 1500);
+        if (!desc && fallback) continue;
         const q = `你是 Danbooru 标签专家。根据角色设定，写一条用于生成该角色「全身立绘」的英文标签串。
 
 只输出标签本身：英文逗号分隔，一行，不要解释、不要引号、不要编号。
@@ -137,24 +154,32 @@ async function generateLooks(onlyNames = null) {
 不要写表情、不要写背景、不要写镜头角度、不要写画风词。
 
 角色名：${c.name}
+已有参考标签：${fallback || '（无）'}
 角色设定：
 ${desc || '（这张卡没有写外观，请按名字给一个合理的日系角色外观）'}`;
         try {
-            let out = await generateQuietPrompt(q, true, true);
+            // LLM 可能长时间不返回；卡里已经抽到兜底时不必等它，最多等 12 秒。
+            const callLlm = (async () => {
+                try {
+                    return await generateQuietPrompt({ quietPrompt: q, quietToLoud: true, skipWIAN: true, removeReasoning: true });
+                } catch (e1) {
+                    return await generateQuietPrompt(q, true, true);  // 旧版酒馆兼容
+                }
+            })();
+            let out = fallback
+                ? await Promise.race([callLlm, new Promise(r => setTimeout(() => r(''), 12000))])
+                : await callLlm;
             out = String(out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
             out = out.replace(/^["'`]+|["'`]+$/g, '').replace(/^(tags?|标签)[:：]\s*/i, '').trim();
-            if (!out) continue;
-            // 这里绝对不要补默认性别。
-            // 旧代码写的是「没有 1boy/1girl 就补 1girl」，结果卡里没写清外观的
-            // 男角色（比如 183cm 的男生）被硬生生画成了粉发少女 —— 立绘性别错、
-            // 整张图跟剧情对不上，就是这一行造成的。
-            // 性别只由角色卡和 AI 给的标签决定，插件不猜。
-            S.artPrompts[c.name] = out;
-            S.lookAuto[c.name] = true;
-            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
-            ok++;
+            // 结果太短/不像标签串就丢弃，保留卡里抽出来的兜底。
+            if (out && /1girl|1boy/.test(out) && out.split(',').length >= 3) {
+                S.artPrompts[c.name] = out;
+                S.lookAuto[c.name] = true;
+                if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
+                if (!fallback) ok++;
+            }
         } catch (e) {
-            console.warn('[VN-Lite] 生成外观标签失败：' + c.name, e && e.message);
+            console.warn('[VN-Lite] LLM 润色外观失败，已用角色卡兜底：' + c.name, e && e.message);
         }
     }
     settings.save();

@@ -92,9 +92,25 @@ function extractBlocks(raw) {
     });
 
     // <background>…</background> → 幕间旁白（别的角色同时在做什么）
+    // 里面常按「【地点】：做了什么」分行，把地点抽成场景切换，
+    // 正文才不会顶着【】标签头被念出来。
     s = s.replace(/<background[^>]*>([\s\S]*?)<\/background>/gi, (m, inner) => {
         const t = plain(inner);
-        return t ? keep({ t: 'narr', text: t, interlude: true }) : '';
+        if (!t) return '';
+        const out = [];
+        for (const line of t.split(/\n+/).map(x => x.trim()).filter(Boolean)) {
+            const meta = line.match(/^【([^】]{2,24})】\s*[：:]\s*(.*)$/);
+            if (meta) {
+                const place = meta[1].trim();
+                if (/[·・]/.test(place) || /(宗|阁|殿|院|谷|堂|山|城|坊|室|洞|楼|门|派|府|街|林|海)/.test(place)) {
+                    out.push(keep({ t: 'dir', scene: place }));
+                }
+                if (meta[2].trim()) out.push(keep({ t: 'narr', text: meta[2].trim(), interlude: true }));
+            } else {
+                out.push(keep({ t: 'narr', text: line, interlude: true }));
+            }
+        }
+        return out.join('');
     });
 
     // <bbs_*> 状态栏模板：时间地点保留成一行提示，其余（变量/物品栏）丢掉
@@ -347,6 +363,21 @@ const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|look|bgm|choice|qte|cg|stats|i
 // 任务状态词 → 统一枚举
 const QUEST_ST = { '开始': 'start', '新': 'start', 'new': 'start', '接受': 'start', '进行': 'start', '完成': 'done', 'done': 'done', '达成': 'done', '失败': 'fail', 'fail': 'fail', '放弃': 'fail' };
 
+// 【地点】：幕间说明 —— 「镜头切到别处，某人在做什么」的过场，不是角色台词。
+// 切成「切场景 + 幕间旁白」，顺带驱动背景，也避免和正文对白混在一起。
+// 两种模式（协议 / 智能）共用。返回是否命中。
+function pushSceneMeta(script, line) {
+    const meta = String(line || '').trim().match(/^【([^】]{2,24})】\s*[：:]\s*(.+)$/);
+    if (!meta) return false;
+    const place = meta[1].trim();
+    const body = meta[2].trim();
+    if (/[·・]/.test(place) || /(宗|阁|殿|院|谷|堂|山|城|坊|室|洞|楼|门|派|府|街|林|海)/.test(place)) {
+        script.segments.push({ t: 'dir', scene: place });
+    }
+    if (body) script.segments.push({ t: 'narr', text: body, interlude: true });
+    return true;
+}
+
 function parseProtocol(text, knownNames) {
     const script = { mode: 'protocol', scene: null, bgm: null, segments: [] };
     // 先剥噪声、再抽第三方块，最后才逐行解析正文。
@@ -440,6 +471,7 @@ function parseProtocol(text, knownNames) {
             }
         }
         if (!line.trim()) return;
+        if (pushSceneMeta(script, line)) return;
         const hasQuote = /[「『“"]/.test(line);
         if (!hasQuote) {
             const ns = narrSpeaker(line, knownNames);
@@ -626,6 +658,7 @@ function parseSmart(text, knownNames) {
     let lastNarrSpeaker = null;
     for (let li = 0; li < lines.length; li++) {
         const line = lines[li];
+        if (pushSceneMeta(script, line)) continue;
         // "名字：对白" 无引号格式（仅已知角色名）
         const colon = line.match(/^([^\s:：，。！？]{1,10})\s*[：:]\s*(.+)$/);
         if (colon && namePool(knownNames).includes(colon[1])) {
@@ -729,6 +762,29 @@ function parseMessage(raw, ctxInfo = {}) {
     mergeTiny(script, 6);
     // 长句按标点切屏
     expandLongSegments(script, Number(ctxInfo.chunk) || 60);
+    // 兜底：清掉任何 narr 段里残留的「【地点】：」标签头（<background> 多行块
+    // 只会被抽到第一行，其余行还顶着标签）。顺手把地点补成场景切换。
+    {
+        const fixed = [];
+        for (const seg of script.segments) {
+            if (seg.t === 'narr' && seg.text) {
+                const m = seg.text.match(/^【([^】]{2,24})】\s*[：:]\s*(.*)$/);
+                if (m) {
+                    const place = m[1].trim();
+                    if (/[·・]/.test(place) || /(宗|阁|殿|院|谷|堂|山|城|坊|室|洞|楼|门|派|府|街|林|海)/.test(place)) {
+                        const prev = fixed[fixed.length - 1];
+                        if (!(prev && prev.t === 'dir' && prev.scene === place)) {
+                            fixed.push({ t: 'dir', scene: place });
+                        }
+                    }
+                    if (m[2].trim()) fixed.push(Object.assign({}, seg, { text: m[2].trim() }));
+                    continue;
+                }
+            }
+            fixed.push(seg);
+        }
+        script.segments = fixed;
+    }
     // 台词说话人不做「从上下文猜」：试过，会把哥哥的台词挂到弟弟名下，
     // 比不显示名字更误导。正确做法是让 AI 写 [char:]（见 protocol.js 第 22 条）。
 

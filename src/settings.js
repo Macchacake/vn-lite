@@ -11,7 +11,8 @@ const DEFAULTS = {
     enabled: true,
     mode: 'smart',      // 'smart' 智能模式 | 'protocol' 协议模式
     typeMs: 28,         // 打字机每字毫秒
-    fontSize: 15,
+    fontSize: 17,
+    _fsMigrated: false,
     chunk: 60,          // 断句长度：一屏最多多少字
     bgmOn: false,
     bgmVol: 0.3,
@@ -69,6 +70,12 @@ function init(extSettings, saveFn, hooks = {}) {
     // 0.7.0 之前那版全身模板会把脚裁掉（含 full-length portrait / detailed face）
     if (/full-length portrait/.test(v.portraitTpl || '')) v.portraitTpl = DEFAULT_PORTRAIT_TPL;
     if (!STYLE_PRESETS[v.stylePreset]) v.stylePreset = DEFAULT_STYLE;
+    // 0.7.8：旧存档字号 15 在手机上偏小、旁白发虚，一次性提到 17。
+    // 用迁移标记，不覆盖用户之后自己调过的字号。
+    if (!v._fsMigrated) {
+        if (!v.fontSize || v.fontSize <= 15) v.fontSize = 17;
+        v._fsMigrated = true;
+    }
     S = v;
     applyFont();
     return S;
