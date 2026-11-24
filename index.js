@@ -19,43 +19,21 @@ import { extension_settings } from '../../../../scripts/extensions.js';
 import { groups, selected_group } from '../../../../scripts/group-chats.js';
 
 import * as settings from './src/settings.js';
-import { parseMessage } from './src/parser.js';
+import * as art from './src/art.js';
+import * as gallery from './src/gallery.js';
+import { parseMessage, resetLearned } from './src/parser.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
-import { generateCG } from './src/sd.js';
+import { buildProtocol } from './src/protocol.js';
 import { bgm } from './src/bgm.js';
-import { SCENE_DEFS, EXPR_LIST } from './src/assets.js';
 
 const PROTOCOL_KEY = 'vnLiteProtocol';
 
-// ---------- 协议提示词（注入给 AI 的演出规范） ----------
-const SCENE_NAMES = Object.keys(SCENE_DEFS).join('、');
-const PROTOCOL_TEXT =
-    '【文字冒险游戏演出规范】\n' +
-    '你是一场文字冒险游戏的主持人（Game Master），你的回复会被渲染成视觉小说游戏画面。请严格遵守：\n' +
-    '一、演出标签：\n' +
-    '1. 场景切换时，单独一行写 [scene:场景]。场景只能是这些类目之一：' + SCENE_NAMES + '\n' +
-    '2. 角色登场或开始说话时，单独一行写 [char:角色名|表情]。表情只能是：' + EXPR_LIST.join('、') + '\n' +
-    '3. 氛围明显变化时，单独一行写 [bgm:氛围]。氛围只能是：平静、欢快、紧张、悲伤、温馨、神秘\n' +
-    '4. 每一段回复的最后，必须给玩家留下一个可操作项：需要玩家抉择时，最后单独一行写 [choice:选项A|选项B|选项C]（2~4个选项）；需要玩家自由行动时，最后单独一行写 [input:提示语]。写完就停，等待玩家操作，不要在标签之后继续写剧情\n' +
-    '5. 需要紧张刺激的瞬间，单独一行写 [qte:简短描述]\n' +
-    '6. 重要剧情节点（初遇、转折、告白、高潮等值得立绘演出的瞬间），单独一行写 [cg:english prompt]，内容为一句英文绘图提示词，按「人数与性别 → 人物外观与服装 → 动作表情 → 场景与光照」顺序用逗号短语描述，例如 [cg:1girl, silver hair, white dress, standing on beach at sunset, emotional, dramatic lighting]\n' +
-    '二、游戏系统标签（像 RPG 游戏一样主动运用它们）:\n' +
-    '7. 玩家状态变化时，单独一行写 [stats:HP|80/100|MP|30/50|金币|120]（标签与数值用|交替排列，分数值会显示为血条）\n' +
-    '8. 玩家获得或失去物品时，单独一行写 [item:+物品名x2] 或 [item:-物品名]\n' +
-    '9. 任务开始、完成或失败时，单独一行写 [quest:开始|任务名|简短描述]、[quest:完成|任务名] 或 [quest:失败|任务名]\n' +
-    '10. 角色对玩家好感度明显变化时，单独一行写 [aff:角色名|+2]（或 -2）\n' +
-    '11. 玩家行动成败存在悬念时（战斗、攀爬、说服、探索…），单独一行写 [dice:1d20|15|成功后的剧情|失败后的剧情]，写完就停，等待玩家掷骰\n' +
-    '12. [input:] 与 [choice:] 二选一，不要同时出现在同一条回复里\n' +
-    '三、主持人守则：\n' +
-    '13. 对话使用「」，叙述正常书写；标签独占一行，不要放进引号内\n' +
-    '14. 除以上标签外不要输出任何其他标签、HTML 或代码块，不要输出思考过程\n' +
-    '15. 像真正的文字游戏一样推进：战斗与探索用 [dice:] 判定，奖励用 [item:]，剧情进展用 [quest:]，情感变化用 [aff:]，状态变化用 [stats:]，重要画面用 [cg:]。不要每条都堆满标签，在剧情自然的节点使用。';
-
+// ---------- 协议提示词（注入给 AI 的演出规范，可在设置里整段修改） ----------
 function applyProtocolInjection() {
     const S = settings.get();
     const on = S.enabled && S.mode === 'protocol';
     try {
-        setExtensionPrompt(PROTOCOL_KEY, on ? PROTOCOL_TEXT : '', 0, 0, false);
+        setExtensionPrompt(PROTOCOL_KEY, on ? buildProtocol(S) : '', 0, 0, false);
     } catch (e) {
         console.warn('[VN-Lite] 协议注入失败', e);
     }
@@ -75,7 +53,7 @@ function getCtxInfo() {
             }
         }
     } catch { /* 群组信息不可用时忽略 */ }
-    return { charName: name2, userName: name1, members };
+    return { charName: name2, userName: name1, members, chunk: settings.get().chunk || 60 };
 }
 
 // ---------- 素材解析：映射表 → 角色头像 → null（剪影） ----------
@@ -113,8 +91,8 @@ function envFactory() {
         userName: name1,
         resolveChar,
         sendUserMessage,
-        // CG 绘画：每次调用取最新设置（URL/开关实时生效）
-        sd: (prompt) => generateCG(prompt, settings.get()),
+        // CG 绘画：先查缓存，再按需生成（URL/开关实时生效）
+        sd: (prompt) => art.cg(prompt),
         openTheater: (script) => {
             openTheater([{ script, title: name2 || '演出' }], envFactory);
         },
@@ -137,7 +115,10 @@ function appendLatestToTheater() {
     if (sig === _appendedSig) return; // 同一条消息（流式/重复事件）不重复追加
     _appendedSig = sig;
     const script = parseMessage(last.mes, getCtxInfo());
-    if (script && script.usable) appendTheater(script, name2 || '演出');
+    if (script && script.usable) {
+        appendTheater(script, name2 || '演出');
+        try { art.prefetch(script); } catch (e) { /* 预生成失败不影响演出 */ }
+    }
 }
 
 // ---------- 文游模式入口 ----------
@@ -205,6 +186,10 @@ async function init() {
         },
     });
 
+    // 美术总监 / 图集：共享同一份设置对象
+    art.init(settings.get());
+    gallery.init(settings.get());
+
     // BGM 初始状态 + 解锁
     bgm.setEnabled(settings.get().bgmOn);
     bgm.setVolume(settings.get().bgmVol);
@@ -237,6 +222,7 @@ async function init() {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         closeTheater();
         _appendedSig = '';
+        resetLearned();   // 换聊天了，学到的角色名清空，避免串味
     });
 
     console.log('[VN-Lite] 文游Lite 已加载：' + settings.get().mode + ' 模式');

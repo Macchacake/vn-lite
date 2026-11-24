@@ -1,7 +1,7 @@
 // ============================================
 // parser.js — 双解析引擎，输出统一"剧本对象"
-//   协议模式：识别 [scene:][char:|表情][bgm:][choice:][qte:] 标签
-//   智能模式：纯文本 → 引号切对白、说话人启发式识别、场景关键词猜测
+//   协议模式：识别 [scene:][char:|表情][bgm:][choice:][qte:] 等标签
+//   智能模式：纯文本 → 引号切对白、说话人识别、场景关键词猜测
 // 两个引擎输出同构，下游渲染不关心来源。
 // ============================================
 
@@ -37,31 +37,153 @@ function cleanText(s) {
 
 const QUOTE_RE = /[「『]([^」』]*?)[」』]|[“]([^“”]*?)[”]|"([^"\n]{2,})"/;
 
-// 说话人提取：去掉括号动作、语气副词、言说动词
-const ADVERBS = '轻声|低声|大声|小声|急切地|慢慢地|突然|悄悄|缓缓|微微|冷冷|温柔地|温和地|无奈地|兴奋地|开心地|慌张地|惊讶地|生气地|冷静地|淡淡';
-const VERBS = '说道|说|道|问|问道|喊|喊道|叫|叫道|答|回答|笑道|苦笑|哭道|低语|开口|怒道|骂道|嘀咕|抱怨|吼|嘶吼|回复|补充|喃喃';
+// ---------- 说话人识别 ----------
+// 目标：宁可认不出（不显示名字），也不要把「雨声」「这时」当成人名。
 
-function extractSpeaker(pre, knownNames) {
-    let s = pre
-        .replace(/[（(【\[][^）)】\]]*[）)】\]]/g, '')   // 去动作括号
-        .replace(/[*~`_]/g, '')
-        .replace(/^\s*(于是|然后|接着|这时|这时候|紧接着)?\s*/, '')
-        .trim();
-    // 反复剥离末尾的 "副词+动词" 尾巴
+// 明显不是人名的词（代词 / 时间 / 方位 / 常见物象 / 常见动词短语）
+const NOT_NAME = new Set([
+    '我', '你', '他', '她', '它', '我们', '你们', '他们', '她们', '它们', '大家', '众人', '有人', '对方',
+    '那人', '这人', '此人', '某人', '自己', '别人', '旁人', '两人', '三人', '所有人', '其他人',
+    '这时', '此时', '那时', '片刻', '沉默', '空气', '气氛', '四周', '周围', '四周一片', '房间', '屋里',
+    '门外', '窗外', '远处', '近处', '头顶', '脚下', '身前', '身后', '身边', '手中', '手里', '桌上',
+    '声音', '脚步', '脚步声明', '雨声', '风声', '雷声', '灯光', '月光', '阳光', '夜色', '天色', '光线',
+    '心中', '心里', '眼中', '眼前', '目光', '眼神', '嘴角', '眉头', '呼吸', '心跳', '身体', '肩膀',
+    '然后', '接着', '于是', '随即', '顿时', '立刻', '马上', '忽然', '突然', '猛然', '缓缓', '轻轻',
+    '微微', '静静', '默默', '终于', '似乎', '仿佛', '好像', '依然', '仍然', '依旧', '不禁', '忍不住',
+    '看着', '望着', '听着', '想着', '说着', '笑着', '走着', '站着', '坐着', '转身', '点头', '摇头',
+    '当然', '不过', '但是', '可是', '因此', '所以', '总之', '然而', '只是', '如果', '虽然',
+]);
+
+// 出现这些字基本不是单纯人名（动词/助词/介词残留）
+const BAD_CHARS = '的了着过是在有就都也还又很太更最被把向从对给将让使和与或但却而则因为所以吗呢吧啊呀哦嗯';
+
+// 首句里常见的「动词短语尾巴」，先剥掉再看剩下的是不是人名
+// 例：「她抬起头」→「她」；「管理员推开门」→「管理员」
+const VERB_TAIL = /(?:推|打|抬|转|站|坐|笑|叹|点|摇|伸|收|握|看|望|听|走|跑|说|问|答|喊|叫|低|皱|咬|吸|吐|闭|睁|回|离|靠|蹲|跪|趴|捏|拍|敲|摸|擦|揉|抓|拉|扯|拎|抱|扶|搂|踢|踩|跳|躺|醒|睡|哭|愣|怔|呆|沉默|皱眉|抬头|低头|回头|转身|起身|坐下|站起)(?:着|了|过|起|开|下|上|住|到|来|去)?[^\s]{0,3}$/;
+
+function stripVerbTail(s) {
     let prev = null;
-    while (prev !== s) {
-        prev = s;
-        s = s.replace(new RegExp(`(${ADVERBS})?(${VERBS})(着|了|道|:|：)?[，,。！!？?\\s]*$`), '').trim();
+    let t = s;
+    while (prev !== t) {
+        prev = t;
+        t = t.replace(VERB_TAIL, '').trim();
     }
-    s = s.replace(/[，,。:：!！?？\s]+$/, '').replace(/^[，,。:：\s]+/, '');
-    if (!s || s.length > 10 || /[。！？!?"」』]/.test(s)) return null;
-    // 已知角色名模糊吸附（包含匹配）
-    if (knownNames && knownNames.length) {
-        for (const n of knownNames) {
-            if (n && (s === n || s.includes(n) || n.includes(s))) return n;
+    return t;
+}
+
+// 「老人在炉边坐下」这类：主语 + 介词短语，取前缀当人名
+const PREP_HEAD = /^[在向从把将对给用和与跟替为到于]/;
+
+function tryPrefixName(head) {
+    for (let len = 2; len <= 4 && len < head.length; len++) {
+        const p = head.slice(0, len);
+        if (/^[我你他她它\d]/.test(p)) continue;
+        if (!isNameLike(p)) continue;
+        const rest = head.slice(len);
+        if (PREP_HEAD.test(rest) || VERB_TAIL.test(rest)) return p;
+    }
+    return null;
+}
+
+// 已知角色名（每次解析由 ctxInfo 提供），以及本次会话学到的名字
+let _learned = new Set();
+
+function learnNames(names) {
+    for (const n of names || []) {
+        const s = String(n || '').trim();
+        if (s && s.length >= 2 && s.length <= 12) _learned.add(s);
+    }
+}
+function resetLearned() { _learned = new Set(); }
+
+function namePool(knownNames) {
+    const pool = new Set();
+    for (const n of knownNames || []) if (n) pool.add(String(n).trim());
+    for (const n of _learned) pool.add(n);
+    return [...pool].filter(Boolean);
+}
+
+// 判断一个短词像不像人名
+function isNameLike(s) {
+    if (!s) return false;
+    const t = s.trim();
+    if (t.length < 2 || t.length > 6) return false;
+    if (!/^[\u4e00-\u9fa5A-Za-z·・]+$/.test(t)) return false;   // 只允许中日文 / 拉丁 / 间隔号
+    if (NOT_NAME.has(t)) return false;
+    // 「众人议论纷纷」「夜色浓得像墨」→ 前缀是常见词，整串不可能是人名
+    for (let i = 2; i < t.length; i++) {
+        if (NOT_NAME.has(t.slice(0, i))) return false;
+    }
+    for (const ch of t) if (BAD_CHARS.includes(ch)) return false;
+    return true;
+}
+
+// 从「引号前的文本」里推断说话人
+// 1) 文本里出现已知名字 → 取最靠右（最接近引号）的那个
+// 2) 否则取第一个短句，看它像不像人名
+function pickSpeaker(pre, knownNames) {
+    let text = String(pre || '')
+        .replace(/[（(【\[][^）)】\]]*[）)】\]]/g, '')   // 去括号动作
+        .replace(/[*~`_]/g, '')
+        .trim();
+    if (!text) return null;
+
+    // 1) 已知名字优先（包含匹配，取最靠右、最长的）
+    let best = null;
+    for (const n of namePool(knownNames)) {
+        if (n.length < 2) continue;
+        const idx = text.lastIndexOf(n);
+        if (idx < 0) continue;
+        if (!best || idx > best.idx || (idx === best.idx && n.length > best.n.length)) best = { n, idx };
+    }
+    if (best) return best.n;
+
+    // 2) 去掉「说/道/问」等尾巴后取首句，再剥掉动词短语看剩下的是不是人名
+    const head = text
+        .split(/[，,。；;：:！!？?]/)[0]
+        .replace(/^\s*(于是|然后|接着|这时|这时候|紧接着)\s*/, '')
+        .trim();
+    const bare = stripVerbTail(head);
+    if (isNameLike(bare)) return bare;
+    // 英文名：「Alice smiled」→ Alice
+    const latin = head.match(/^[A-Z][A-Za-z'’\-]{1,15}/);
+    if (latin) return latin[0];
+    return tryPrefixName(head);
+}
+
+// ---------- 断句 ----------
+// 长文本按标点切成多屏，避免一屏塞进整段旁白（手机上尤其难受）
+const SENT_END = /[。！？!?…；;]/;
+const SOFT_BREAK = /[，,、]/;
+
+function splitText(text, max) {
+    const s = String(text || '');
+    if (!s || s.length <= max) return [s];
+    const out = [];
+    let buf = '';
+    for (const ch of s) {
+        buf += ch;
+        if (SENT_END.test(ch) && buf.length >= 6) { out.push(buf); buf = ''; }
+        else if (buf.length >= max && SOFT_BREAK.test(ch)) { out.push(buf); buf = ''; }
+    }
+    if (buf) out.push(buf);
+    return out.map(x => x.trim()).filter(Boolean);
+}
+
+function expandLongSegments(script, max) {
+    if (!max || max < 12) return script;
+    const out = [];
+    for (const seg of script.segments) {
+        if ((seg.t === 'narr' || seg.t === 'say') && seg.text && seg.text.length > max) {
+            for (const piece of splitText(seg.text, max)) {
+                out.push(seg.t === 'say' ? { t: 'say', who: seg.who, text: piece } : { t: 'narr', text: piece });
+            }
+        } else {
+            out.push(seg);
         }
     }
-    return s;
+    script.segments = out;
+    return script;
 }
 
 // ---------- 协议标签解析 ----------
@@ -95,6 +217,7 @@ function parseProtocol(text, knownNames) {
                 if (name) {
                     script.segments.push({ t: 'dir', char: { name, expr: expr || null } });
                     lastChar = name;
+                    learnNames([name]);
                 }
             } else if (tag === 'choice') {
                 const opts = val.split(/[|｜/]/).map(x => x.trim()).filter(Boolean).slice(0, 4);
@@ -125,6 +248,7 @@ function parseProtocol(text, knownNames) {
                 if (parts[0]) {
                     const d = parseInt(parts[1] || '1', 10);
                     script.segments.push({ t: 'aff', name: parts[0], delta: isNaN(d) ? 1 : d });
+                    learnNames([parts[0]]);
                 }
             } else if (tag === 'dice') {
                 // [dice:1d20|15|成功剧情|失败剧情] —— 掷 N 面骰，≥目标算成功
@@ -175,23 +299,76 @@ function guessMood(text) {
     return best;
 }
 
+function cleanNarr(s) {
+    return String(s || '')
+        .replace(/^[，,。、；;：:\s]+/, '')
+        .replace(/[：:，,、；;\s]+$/, '')   // 去掉引号前残留的冒号
+        .trim();
+}
+
+// 一行文本 → 若干 say/narr 段（支持一行里多组引号）
 function pushSpeech(script, line, knownNames, fallbackSpeaker) {
-    const m = line.match(QUOTE_RE);
-    if (m) {
-        const quote = m[1] ?? m[2] ?? m[3];
-        const pre = line.slice(0, m.index);
-        const speaker = extractSpeaker(pre, knownNames);
-        if (pre.trim() && !speaker) {
-            // 引号前的长文本是旁白
-            script.segments.push({ t: 'narr', text: pre.trim() });
+    const re = new RegExp(QUOTE_RE.source, 'g');
+    let m, cursor = 0, any = false;
+    while ((m = re.exec(line))) {
+        any = true;
+        const quote = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+        const before = line.slice(cursor, m.index).trim();
+        let who = null;
+        if (before) {
+            who = pickSpeaker(before, knownNames);
+            if (who) learnNames([who]);
+            else {
+                const narr = cleanNarr(before);
+                if (narr) script.segments.push({ t: 'narr', text: narr });
+            }
+        } else if (fallbackSpeaker) {
+            who = fallbackSpeaker;
         }
-        // 说话人优先级：显式前缀 > fallback（协议模式的 [char:]）
-        const who = speaker || (fallbackSpeaker && !pre.trim() ? fallbackSpeaker : speaker);
-        script.segments.push({ t: 'say', who, text: quote.trim() });
-        // 引号后的剩余文本不再处理（通常是动作描述，合并进旁白太碎）
-    } else {
-        script.segments.push({ t: 'narr', text: line.trim() });
+        if (quote) script.segments.push({ t: 'say', who, text: quote });
+        cursor = re.lastIndex;
     }
+    if (!any) {
+        const narr = cleanNarr(line);
+        if (narr) script.segments.push({ t: 'narr', text: narr });
+        return;
+    }
+    // 引号后面的动作描写不要丢
+    const tail = cleanNarr(line.slice(cursor));
+    if (tail) script.segments.push({ t: 'narr', text: tail });
+}
+
+function parseSmart(text, knownNames) {
+    const script = { mode: 'smart', scene: null, bgm: null, segments: [] };
+    const cleaned = cleanText(text);
+    if (!cleaned.trim()) return script;
+    script.scene = guessScene(cleaned);
+    script.bgm = guessMood(cleaned);
+    let lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    const tail = splitTrailingOptions(lines);
+    lines = tail.rest;
+
+    let lastSpeaker = null;
+    for (const line of lines) {
+        // "名字：对白" 无引号格式（仅已知角色名）
+        const colon = line.match(/^([^\s:：，。！？]{1,10})\s*[：:]\s*(.+)$/);
+        if (colon && namePool(knownNames).includes(colon[1])) {
+            lastSpeaker = colon[1];
+            script.segments.push({ t: 'say', who: colon[1], text: colon[2].trim() });
+            continue;
+        }
+        const before = script.segments.length;
+        pushSpeech(script, line, knownNames, lastSpeaker);
+        for (let i = before; i < script.segments.length; i++) {
+            const s = script.segments[i];
+            if (s.t === 'say' && s.who) lastSpeaker = s.who;
+        }
+    }
+    // 结尾的选项列表 → 可点选项
+    if (tail.options.length >= 2) {
+        script.segments.push({ t: 'choice', opts: tail.options.slice(0, 4) });
+    }
+    return script;
 }
 
 // 智能模式兜底：识别结尾的「选项列表」，转成可点选项
@@ -214,68 +391,21 @@ function splitTrailingOptions(lines) {
     return { options, rest };
 }
 
-function parseSmart(text, knownNames) {
-    const script = { mode: 'smart', scene: null, bgm: null, segments: [] };
-    const cleaned = cleanText(text);
-    if (!cleaned.trim()) return script;
-    script.scene = guessScene(cleaned);
-    script.bgm = guessMood(cleaned);
-    let lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
-    const tail = splitTrailingOptions(lines);
-    lines = tail.rest;
-    let lastSpeaker = null;
-    for (const line of lines) {
-        // "名字：对白" 无引号格式（仅已知角色名）
-        const colon = line.match(/^([^\s:：，。！？]{1,10})\s*[：:]\s*(.+)$/);
-        if (colon && knownNames && knownNames.includes(colon[1])) {
-            lastSpeaker = colon[1];
-            script.segments.push({ t: 'say', who: colon[1], text: colon[2].trim() });
-            continue;
-        }
-        if (QUOTE_RE.test(line)) {
-            // 按引号顺序游走：每段引号前的短文本决定说话人
-            const re = new RegExp(QUOTE_RE.source, 'g');
-            let m, cursor = 0;
-            while ((m = re.exec(line))) {
-                const before = line.slice(cursor, m.index).trim();
-                const quote = (m[1] ?? m[2] ?? m[3] ?? '').trim();
-                if (before) {
-                    let spk = extractSpeaker(before, knownNames);
-                    if (!spk && before.length <= 10 && !/[。，！？]/.test(before)) spk = before;
-                    if (spk) { lastSpeaker = spk; }
-                    else {
-                        // 前置长文本不是说话人 → 旁白
-                        script.segments.push({ t: 'narr', text: before.replace(/^[，,。]\s*/, '') });
-                    }
-                }
-                if (quote) script.segments.push({ t: 'say', who: lastSpeaker, text: quote });
-                cursor = re.lastIndex;
-            }
-            const tail = line.slice(cursor).trim();
-            if (tail) script.segments.push({ t: 'narr', text: tail.replace(/^[，,。]\s*/, '') });
-        } else {
-            script.segments.push({ t: 'narr', text: line });
-        }
-    }
-    // 结尾的选项列表 → 可点选项
-    if (tail.options.length >= 2) {
-        script.segments.push({ t: 'choice', opts: tail.options.slice(0, 4) });
-    }
-    return script;
-}
-
 // ---------- 统一入口 ----------
-// ctxInfo: { charName, userName, members: [] } 用于说话人吸附
+// ctxInfo: { charName, userName, members: [], chunk } 用于说话人吸附与断句长度
 function parseMessage(raw, ctxInfo = {}) {
     if (!raw || typeof raw !== 'string') return null;
     const knownNames = [ctxInfo.charName, ctxInfo.userName, ...(ctxInfo.members || [])]
-        .filter(Boolean).filter(n => n !== '你' && n.length <= 12);
+        .filter(Boolean).filter(n => n !== '你' && String(n).length <= 12);
     let script;
     if (hasProtocolTag(raw)) {
         script = parseProtocol(raw, knownNames);
     } else {
         script = parseSmart(raw, knownNames);
     }
+    // 长句按标点切屏
+    expandLongSegments(script, Number(ctxInfo.chunk) || 60);
+
     // 收集出场角色（最多 3 个最近说话人）
     const seen = new Set();
     script.chars = [];
@@ -288,6 +418,8 @@ function parseMessage(raw, ctxInfo = {}) {
         }
         if (script.chars.length >= 3) break;
     }
+    learnNames(script.chars.map(c => c.name));
+
     // 降级保护：一段都没有 → 全文一条旁白
     if (!script.segments.length) {
         const fallback = cleanText(raw).trim();
@@ -300,4 +432,4 @@ function parseMessage(raw, ctxInfo = {}) {
 }
 
 const EXPR_NAMES = ['平静', '微笑', '难过', '生气', '惊讶', '害羞', '严肃', '得意'];
-export { parseMessage, EXPR_NAMES };
+export { parseMessage, EXPR_NAMES, learnNames, resetLearned, pickSpeaker, splitText };

@@ -9,6 +9,7 @@
 import { sceneBG, weatherOf, silhouetteURI } from './assets.js';
 import { parseMessage } from './parser.js';
 import { bgm } from './bgm.js';
+import { peek as peekArt, onReady as onArtReady } from './art.js';
 import { renderChoices, renderQTE, renderDice, renderInput } from './minigame.js';
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -98,7 +99,9 @@ function createStage(script, env) {
     function setScene(cat) {
         if (!cat || cat === curScene) return;
         curScene = cat;
-        bgBack.style.backgroundImage = `url("${sceneBG(cat)}")`;
+        // 优先用 AI 生成的背景，没有就退回内置 SVG
+        const gen = peekArt('bg', cat);
+        bgBack.style.backgroundImage = `url("${gen || sceneBG(cat)}")`;
         bgBack.style.opacity = '1';
         bgFront.style.opacity = '0';
         const t = bgFront; bgFront = bgBack; bgBack = t;
@@ -106,14 +109,34 @@ function createStage(script, env) {
         else weather.className = 'vnl-weather';
     }
 
+    // 立绘图片：手动映射 > AI 生成 > 剪影
+    function spriteSrc(name, expr) {
+        const mapped = env.resolveChar ? env.resolveChar(name) : null;
+        if (mapped) return mapped;
+        const gen = peekArt('char', name);
+        if (gen) return gen;
+        return silhouetteURI(name, expr);
+    }
+
+    // 生图完成 → 实时替换到舞台上
+    const offArt = onArtReady((kind, key, url) => {
+        if (state.disposed) return;
+        if (kind === 'bg' && key === curScene) {
+            bgFront.style.backgroundImage = `url("${url}")`;
+        } else if (kind === 'char' && state.onStage.has(key)) {
+            const img = state.onStage.get(key).node.querySelector('img');
+            if (img) img.src = url;
+        }
+    });
+
     // --- 立绘 ---
     function addSprite(name, expr) {
         if (state.onStage.has(name)) {
-            if (expr) state.onStage.get(name).expr = expr;
-            const node = state.onStage.get(name).node;
-            const img = node.querySelector('img');
-            const mapped = env.resolveChar ? env.resolveChar(name) : null;
-            if (!mapped) img.src = silhouetteURI(name, expr || state.onStage.get(name).expr);
+            const info = state.onStage.get(name);
+            if (expr) info.expr = expr;
+            const img = info.node.querySelector('img');
+            const src = spriteSrc(name, expr || info.expr);
+            if (img && img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
             return;
         }
         // 超过 3 个：移除最早且当前不在说话的
@@ -126,8 +149,9 @@ function createStage(script, env) {
         node.className = 'vnl-sprite';
         const img = document.createElement('img');
         img.alt = name; img.draggable = false;
-        const mapped = env.resolveChar ? env.resolveChar(name) : null;
-        img.src = mapped || silhouetteURI(name, expr);
+        const src = spriteSrc(name, expr);
+        img.dataset.src = src;
+        img.src = src;
         const label = document.createElement('div');
         label.className = 'vnl-sname'; label.textContent = name;
         node.append(img, label);
@@ -234,7 +258,17 @@ function createStage(script, env) {
             textEl.textContent = '';
             const toast = document.createElement('div');
             toast.className = 'vnl-sys vnl-item ' + (seg.op === '+' ? 'gain' : 'loss');
-            toast.textContent = (seg.op === '+' ? '🎒 获得 ' : '📦 失去 ') + seg.name + (seg.qty > 1 ? ' ×' + seg.qty : '');
+            const icon = peekArt('item', seg.name);
+            if (icon) {
+                const im = document.createElement('img');
+                im.className = 'vnl-item-icon';
+                im.src = icon;
+                im.alt = seg.name;
+                toast.appendChild(im);
+            }
+            toast.appendChild(document.createTextNode(
+                (seg.op === '+' ? '🎒 获得 ' : '📦 失去 ') + seg.name + (seg.qty > 1 ? ' ×' + seg.qty : '')
+            ));
             textEl.appendChild(toast);
         } else if (seg.t === 'quest') {
             nameEl.style.display = 'none';
@@ -429,7 +463,7 @@ function createStage(script, env) {
     setScene(script.scene || '室内');
     if (script.bgm) bgm.setMood(script.bgm);
 
-    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, get _ended() { return state.ended; }, dispose() { state.disposed = true; stopTyper(); el.remove(); } };
+    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, get _ended() { return state.ended; }, dispose() { state.disposed = true; stopTyper(); offArt(); el.remove(); } };
 }
 
 // ---------- 挂载到消息 ----------

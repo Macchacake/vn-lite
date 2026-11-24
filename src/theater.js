@@ -8,6 +8,8 @@
 
 import { createStage, stopTyper } from './stage.js';
 import { save as saveSettings, mountPanel } from './settings.js';
+import { renderPage as renderGalleryPage } from './gallery.js';
+import { prefetch as prefetchArt } from './art.js';
 import { bgm } from './bgm.js';
 
 let _open = null; // 当前剧场实例
@@ -117,6 +119,7 @@ function openTheater(items, envFactory, opts = {}) {
                 <button class="vnl-menu-btn vnl-menu-half" data-m="fbig">A+ 放大</button>
             </div>
             <button class="vnl-menu-btn" data-m="bgm">♪ 氛围音乐</button>
+            <button class="vnl-menu-btn" data-m="gallery">🖼 图集</button>
             <button class="vnl-menu-btn" data-m="settings">⚙ 文游设置</button>
             <button class="vnl-menu-btn vnl-menu-danger" data-m="exit">✕ 退出文游</button>
         </div>`;
@@ -137,9 +140,24 @@ function openTheater(items, envFactory, opts = {}) {
     const settingsBody = settingsPage.querySelector('.vnl-settings-body');
     let settingsMounted = false;
 
+    // ---------- 图集页 ----------
+    const galleryPage = document.createElement('div');
+    galleryPage.className = 'vnl-settings vnl-gallery-page';
+    galleryPage.innerHTML = `
+        <div class="vnl-settings-head">
+            <button class="vnl-btn" data-act="back" title="返回">←</button>
+            <div class="vnl-settings-title">图集</div>
+            <div class="vnl-settings-spacer"></div>
+        </div>
+        <div class="vnl-settings-body vnl-gallery-body"></div>`;
+    overlay.appendChild(galleryPage);
+    const galleryBody = galleryPage.querySelector('.vnl-gallery-body');
+
     function showSettings() {
         if (!settingsMounted) {
-            mountPanel(settingsBody);
+            mountPanel(settingsBody, {
+                openGallery: () => { hideSettings(); showGallery(); },
+            });
             settingsMounted = true;
         }
         settingsPage.classList.add('vnl-settings-on');
@@ -147,9 +165,22 @@ function openTheater(items, envFactory, opts = {}) {
     function hideSettings() {
         settingsPage.classList.remove('vnl-settings-on');
     }
+    function showGallery() {
+        renderGalleryPage(galleryBody);   // 每次打开重新渲染，保证是最新的
+        galleryPage.classList.add('vnl-settings-on');
+    }
+    function hideGallery() {
+        galleryPage.classList.remove('vnl-settings-on');
+    }
+    const galleryOn = () => galleryPage.classList.contains('vnl-settings-on');
+
     settingsPage.querySelector('[data-act="back"]').addEventListener('click', e => {
         e.stopPropagation();
         hideSettings();
+    });
+    galleryPage.querySelector('[data-act="back"]').addEventListener('click', e => {
+        e.stopPropagation();
+        hideGallery();
     });
 
     const menuOpen = () => menu.classList.contains('vnl-menu-on');
@@ -207,6 +238,8 @@ function openTheater(items, envFactory, opts = {}) {
         }
         atEndBox = false;
         titleEl.textContent = items[i].title || `第 ${i + 1} 幕`;
+        // 提前把这一幕要用的背景 / 立绘 / 物品图排进生成队列
+        try { prefetchArt(items[i].script); } catch (e) { /* 预生成失败不影响演出 */ }
         const stageEnv = Object.assign({}, env, { onEnd: handleStageEnd });
         stage = createStage(items[i].script, stageEnv);
         slot.appendChild(stage.el);
@@ -289,6 +322,9 @@ function openTheater(items, envFactory, opts = {}) {
         } else if (act === 'settings') {
             hideMenu();
             showSettings();
+        } else if (act === 'gallery') {
+            hideMenu();
+            showGallery();
         } else if (act === 'exit') {
             closeTheater();
         }
@@ -297,7 +333,8 @@ function openTheater(items, envFactory, opts = {}) {
     // ---------- 键盘（桌面端补充） ----------
     function onKey(e) {
         if (e.key === 'Escape') {
-            if (settingsPage.classList.contains('vnl-settings-on')) hideSettings();
+            if (galleryOn()) hideGallery();
+            else if (settingsPage.classList.contains('vnl-settings-on')) hideSettings();
             else if (menuOpen()) hideMenu();
             else closeTheater();
         }

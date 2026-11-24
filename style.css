@@ -822,3 +822,152 @@
     min-height: 40px;
     font-size: 14px;
 }
+
+/* ---------- 设置页：协议编辑器 / 状态提示 ---------- */
+.vnl-protocol {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 220px;
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(120, 160, 230, 0.38);
+    background: rgba(14, 19, 32, 0.96);
+    color: #dfe8f8;
+    font-size: 13px;
+    line-height: 1.55;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    resize: vertical;
+    -webkit-user-select: text;
+    user-select: text;
+}
+.vnl-protocol:focus {
+    outline: none;
+    border-color: #7ea6ee;
+    box-shadow: 0 0 0 2px rgba(126, 166, 238, 0.16);
+}
+.vnl-set-btns {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.vnl-set-flash {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    height: 0;
+    overflow: hidden;
+    opacity: 0;
+    color: #9fe0b8;
+    font-size: 13px;
+    transition: opacity 0.2s;
+}
+.vnl-set-flash-on {
+    height: auto;
+    opacity: 1;
+    padding: 6px 0 10px;
+}
+.vnl-item-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+
+/* ---------- 图集 ---------- */
+.vnl-gallery-body { padding: 8px 12px calc(24px + env(safe-area-inset-bottom, 0px)); }
+.vnl-gal-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 2px 12px;
+}
+.vnl-gal-count { flex: 1; color: #93a1ba; font-size: 13px; }
+.vnl-gal-clear {
+    min-height: 36px;
+    padding: 0 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(220, 110, 110, 0.45);
+    background: rgba(70, 26, 30, 0.6);
+    color: #f0b8b8;
+    font-size: 13px;
+}
+.vnl-gal-empty {
+    padding: 60px 20px;
+    text-align: center;
+    color: #8593ab;
+    font-size: 14px;
+    line-height: 1.8;
+}
+.vnl-gal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 8px;
+}
+.vnl-gal-cell {
+    position: relative;
+    padding: 0;
+    border: 1px solid rgba(120, 150, 210, 0.25);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0d1119;
+    aspect-ratio: 3 / 4;
+    cursor: pointer;
+}
+.vnl-gal-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.vnl-gal-tag {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: #dbe6f8;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.78));
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.vnl-gal-light {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+}
+.vnl-gal-light-inner {
+    max-width: 100%;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+}
+.vnl-gal-light-inner img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+    border-radius: 10px;
+}
+.vnl-gal-meta {
+    color: #a9b6cc;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-line;
+    max-height: 16vh;
+    overflow-y: auto;
+    text-align: center;
+}
+.vnl-gal-close { min-height: 44px; padding: 0 28px; }

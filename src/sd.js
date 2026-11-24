@@ -188,17 +188,17 @@ async function tryGenerateOn(base, prompt, S) {
             if (!outs) continue; // 排队中
             const img = outs?.['9']?.images?.[0];
             if (img) {
-                const vr = await fetch(base + '/view?filename=' + encodeURIComponent(img.filename) +
-                    '&subfolder=' + encodeURIComponent(img.subfolder || '') +
-                    '&type=' + encodeURIComponent(img.type || 'output'),
-                    { signal: timeoutSignal(30000) });
-                if (!vr.ok) throw new Error('view ' + vr.status);
-                const blob = await vr.blob();
-                const url = URL.createObjectURL(blob);
+                const sub = img.subfolder || '';
+                const typ = img.type || 'output';
+                // 直接用 /view 的 URL（不再转 blob）：
+                // 这样地址可以持久化到设置里，图集与素材缓存重启后依然可用
+                const url = base + '/view?filename=' + encodeURIComponent(img.filename) +
+                    '&subfolder=' + encodeURIComponent(sub) +
+                    '&type=' + encodeURIComponent(typ);
                 _imgCache.set(key, url);
                 _lastGood.base = base;
                 _lastGood.ts = Date.now();
-                return { url, model, base };
+                return { url, filename: img.filename, subfolder: sub, type: typ, base, model };
             }
             if (hist[prompt_id].status?.completed) throw new Error('gen failed');
         }
