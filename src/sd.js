@@ -143,11 +143,12 @@ function pickModel(models) {
 // SDXL 用 832x1216，SD1.5 用 512x768
 function buildWorkflow(model, prompt, isXL) {
     const w = Math.random() * 4294967295 >>> 0; // 随机种子
-    const pos = 'masterpiece, best quality, very aesthetic, absurdres, ' + prompt;
-    const neg = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, watermark, signature, blurry';
+    // Animagine XL 4.0 官方规范：分数标签正向 + 官方完整负向，CFG 5 / 28 步
+    const pos = 'masterpiece, high score, great score, absurdres, ' + prompt;
+    const neg = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry';
     const [W, H] = isXL ? [832, 1216] : [512, 768];
     return {
-        '3': { class_type: 'KSampler', inputs: { seed: w, steps: isXL ? 26 : 22, cfg: isXL ? 6 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+        '3': { class_type: 'KSampler', inputs: { seed: w, steps: isXL ? 28 : 22, cfg: isXL ? 5 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
         '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: model } },
         '5': { class_type: 'EmptyLatentImage', inputs: { width: W, height: H, batch_size: 1 } },
         '6': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['4', 1] } },

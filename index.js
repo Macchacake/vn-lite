@@ -38,7 +38,7 @@ const PROTOCOL_TEXT =
     '3. 氛围明显变化时，单独一行写 [bgm:氛围]。氛围只能是：平静、欢快、紧张、悲伤、温馨、神秘\n' +
     '4. 剧情需要玩家做选择时，单独一行写 [choice:选项A|选项B|选项C]（2~4个选项），写完就停，等待玩家选择\n' +
     '5. 需要紧张刺激的瞬间，单独一行写 [qte:简短描述]\n' +
-    '6. 重要剧情节点（初遇、转折、告白、高潮等值得立绘演出的瞬间），单独一行写 [cg:english prompt]，内容为一句话的英文绘图提示词，描述画面主体、场景与氛围，例如 [cg:1girl, silver hair, standing on beach at sunset, emotional, dramatic lighting]\n' +
+    '6. 重要剧情节点（初遇、转折、告白、高潮等值得立绘演出的瞬间），单独一行写 [cg:english prompt]，内容为一句英文绘图提示词，按「人数与性别 → 人物外观与服装 → 动作表情 → 场景与光照」顺序用逗号短语描述，例如 [cg:1girl, silver hair, white dress, standing on beach at sunset, emotional, dramatic lighting]\n' +
     '二、游戏系统标签（像 RPG 游戏一样主动运用它们）:\n' +
     '7. 玩家状态变化时，单独一行写 [stats:HP|80/100|MP|30/50|金币|120]（标签与数值用|交替排列，分数值会显示为血条）\n' +
     '8. 玩家获得或失去物品时，单独一行写 [item:+物品名x2] 或 [item:-物品名]\n' +
