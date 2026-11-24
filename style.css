@@ -271,6 +271,23 @@
     background: rgba(74, 123, 200, 0.45);
     border-color: #7ea6ee;
 }
+/* 二次确认：第一次点=选中高亮，第二次点同一项才发送 */
+.vnl-choice-btn.armed {
+    background: rgba(96, 150, 245, 0.32);
+    border-color: #9dc0ff;
+    box-shadow: 0 0 0 2px rgba(157, 192, 255, 0.45), 0 0 16px rgba(120, 170, 255, 0.25);
+    color: #ffffff;
+    font-weight: 600;
+}
+.vnl-choice-hint {
+    width: 100%;
+    box-sizing: border-box;
+    color: #9fb0cc;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 2px;
+    text-align: center;
+}
 .vnl-qte-bar {
     position: relative;
     height: 26px;

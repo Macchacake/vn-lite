@@ -6,6 +6,8 @@
 
 import { save as saveSettings } from './settings.js';
 import { applyChroma } from './chroma.js';
+import * as localstore from './localstore.js';
+import { getChatKey } from './session.js';
 
 let S = null;
 
@@ -14,7 +16,12 @@ export function init(settings) { S = settings; }
 const KIND_LABEL = { bg: '背景', char: '立绘', item: '物品', cg: '插画' };
 
 export function urlOf(g) {
-    if (!g || !g.base || !g.filename) return '';
+    if (!g || !g.filename) return '';
+    // 本地副本优先（隧道关掉也能看图）
+    const localId = g.localId || (g.kind && g.key ? (getChatKey() + '::' + g.kind + '|' + g.key) : null);
+    const local = localId ? localstore.peekUrl(localId) : null;
+    if (local) return local;
+    if (!g.base) return '';
     return g.base + '/view?filename=' + encodeURIComponent(g.filename) +
         '&subfolder=' + encodeURIComponent(g.subfolder || '') +
         '&type=' + encodeURIComponent(g.type || 'output');
@@ -23,8 +30,10 @@ export function urlOf(g) {
 export function addToGallery(item) {
     if (!S || !item || !item.filename) return;
     if (!Array.isArray(S.gallery)) S.gallery = [];
+    const chat = getChatKey();
     const id = item.base + '|' + item.filename;
-    if (S.gallery.some(g => (g.base + '|' + g.filename) === id)) return;
+    // 同一张图在同一段对话里只记一次；跨对话各自保留一份
+    if (S.gallery.some(g => (g.base + '|' + g.filename) === id && (g.chat || 'default') === chat)) return;
     S.gallery.unshift({
         kind: item.kind || 'cg',
         key: item.key || '',
@@ -33,27 +42,40 @@ export function addToGallery(item) {
         filename: item.filename,
         subfolder: item.subfolder || '',
         type: item.type || 'output',
+        localId: item.localId || '',
+        chat,
         ts: Date.now(),
     });
-    if (S.gallery.length > 240) S.gallery.length = 240;
+    if (S.gallery.length > 480) S.gallery.length = 480;
     saveSettings();
 }
 
-export function list() { return (S && Array.isArray(S.gallery)) ? S.gallery : []; }
+// 只返回当前对话的图集：切到别的对话看不到这段对话的历史生图
+export function list() {
+    if (!S || !Array.isArray(S.gallery)) return [];
+    const chat = getChatKey();
+    return S.gallery.filter(g => (g.chat || 'default') === chat);
+}
 
 // 图片 404 / ComfyUI 换了地址 → 从图集里剔掉，别留一格空白
 export function removeFromGallery(item) {
     if (!S || !Array.isArray(S.gallery) || !item) return;
     const id = item.base + '|' + item.filename;
+    const chat = getChatKey();
     const before = S.gallery.length;
-    S.gallery = S.gallery.filter(g => (g.base + '|' + g.filename) !== id);
+    S.gallery = S.gallery.filter(g => !((g.base + '|' + g.filename) === id && (g.chat || 'default') === chat));
     if (S.gallery.length !== before) saveSettings();
+    if (item.localId) localstore.remove(item.localId);
 }
 
+// 只清当前对话的图集（含本地文件），不动别的对话
 export function clearGallery() {
     if (!S) return;
-    S.gallery = [];
+    const chat = getChatKey();
+    const mine = S.gallery.filter(g => (g.chat || 'default') === chat);
+    S.gallery = S.gallery.filter(g => (g.chat || 'default') !== chat);
     saveSettings();
+    for (const g of mine) if (g.localId) localstore.remove(g.localId);
 }
 
 // ---------- 图集页面 ----------
@@ -65,12 +87,12 @@ export function renderPage(host) {
 
     const bar = document.createElement('div');
     bar.className = 'vnl-gal-bar';
-    bar.innerHTML = `<div class="vnl-gal-count">共 ${items.length} 张</div>`;
+    bar.innerHTML = `<div class="vnl-gal-count">本对话 ${items.length} 张（只显示当前对话的图）</div>`;
     const clr = document.createElement('button');
     clr.className = 'vnl-gal-clear';
-    clr.textContent = '清空图集';
+    clr.textContent = '清空本对话图集';
     clr.addEventListener('click', () => {
-        if (!confirm('确定清空图集？已生成的图会从列表里移除（ComfyUI 里的文件不会删）。')) return;
+        if (!confirm('确定清空当前对话的图集？只删除本对话的记录和手机本地副本，不影响其它对话，也不删 ComfyUI 上的文件。')) return;
         clearGallery();
         renderPage(host);
     });
@@ -80,7 +102,7 @@ export function renderPage(host) {
     if (!items.length) {
         const empty = document.createElement('div');
         empty.className = 'vnl-gal-empty';
-        empty.innerHTML = '还没有图。<br>开启「AI 绘图」后，背景 / 立绘 / 物品会在演出过程中自动生成。';
+        empty.innerHTML = '这段对话还没有图。<br>开启「AI 绘图」后，背景 / 立绘 / 物品会在演出过程中自动生成，并自动下载到手机本地。<br>切到别的对话只会看到那段对话自己的图。';
         host.appendChild(empty);
         return;
     }

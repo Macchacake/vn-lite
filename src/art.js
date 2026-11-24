@@ -10,6 +10,8 @@ import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
 import { styleOf, SIZE, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
 import { clearChromaCache } from './chroma.js';
+import * as localstore from './localstore.js';
+import { scoped, getChatKey } from './session.js';
 
 let S = null;                       // 当前设置对象（引用，实时生效）
 const queue = [];                   // 待生成队列
@@ -19,7 +21,7 @@ const listeners = new Set();
 
 // 素材缓存版本：改了提示词结构 / 出图尺寸 / 透明底做法就 +1，
 // 旧图会整体作废，避免用户看到上一版留下的废图。
-const ART_VER = 5;
+const ART_VER = 6;   // v6: 素材按对话隔离 + 图片下载到手机本地（IndexedDB）
 
 export function init(settings) {
     S = settings;
@@ -81,6 +83,16 @@ function cacheOf(kind) {
 
 export function viewUrl(rec) {
     if (!rec || !rec.filename) return null;
+    // 本地优先：图已经下载到手机，直接给 blob URL。隧道关掉、ComfyUI 关掉、
+    // 换了公网地址，图都还在。localId 是按对话隔离的稳定 key。
+    const localId = rec.localId || (rec.kind && rec.key ? scoped(rec.kind + '|' + rec.key) : null);
+    const local = localId ? localstore.peekUrl(localId) : null;
+    if (local) return local;
+    return remoteUrl(rec);
+}
+
+// 远程地址（ComfyUI /view）：本地没有副本时用。
+function remoteUrl(rec) {
     // 缓存里记的是生成当时的 base。trycloudflare 每次重启都会换域名，
     // 旧 base 一失效，图就全变白/黑。这里在取图时实时换到当前 sdUrl：
     // 图片文件还在同一台 ComfyUI 上，只要 base 指向它就能取回。
@@ -99,23 +111,39 @@ export function viewUrl(rec) {
 
 export function peek(kind, key) {
     if (!S) return null;
-    const rec = cacheOf(kind)[key];
+    const bucket = cacheOf(kind);
+    // 先查当前对话（带前缀），再查无前缀的旧缓存（兼容升级前的记录）
+    const rec = bucket[scoped(key)] || bucket[key];
     return rec ? viewUrl(rec) : null;
 }
 
 function store(kind, key, res, prompt) {
+    // 素材 key 带上当前对话前缀 → 不同对话的同名场景/角色各存各的
+    const scopedKey = scoped(key);
+    const localId = scoped(kind + '|' + key);
     const rec = {
         base: res.base, filename: res.filename,
         subfolder: res.subfolder || '', type: res.type || 'output',
+        localId,
+        chat: getChatKey(),
+        storedAt: Date.now(),
     };
     const m = cacheOf(kind);
-    m[key] = rec;
+    m[scopedKey] = rec;
     // 简单上限，避免设置文件无限膨胀
     const keys = Object.keys(m);
     if (keys.length > 240) for (const k of keys.slice(0, keys.length - 240)) delete m[k];
     saveSettings();
     addToGallery({ kind, key, prompt, ...rec });
     emit(kind, key, viewUrl(rec));
+
+    // 后台把图下载到手机本地（不阻塞演出）。失败也没关系，退回远程地址。
+    const remote = remoteUrl(rec);
+    if (remote) {
+        localstore.saveFromUrl(localId, remote, { kind, key, prompt, chatId: getChatKey() })
+            .then(() => emit(kind, key, viewUrl(rec)))  // 下载完成 → 舞台换成 blob URL
+            .catch(() => { /* 静默降级：继续用远程地址 */ });
+    }
 }
 
 // ---------- 提示词模板 ----------
@@ -391,6 +419,22 @@ export async function cg(prompt) {
     return { url: res.url };
 }
 
+// 切换/初始化对话时调用：把这段对话的本地图从 IndexedDB 重建为 objectURL，
+// 然后通知舞台用本地地址重画（远程地址失效时这段尤其重要）。
+export function hydrateChat() {
+    return localstore.hydrate(getChatKey()).then(() => {
+        if (!S || !S.artCache) return;
+        for (const kind of ['bg', 'char', 'item', 'cg']) {
+            const bucket = S.artCache[kind] || {};
+            for (const [k, rec] of Object.entries(bucket)) {
+                if (!rec) continue;
+                const rawKey = k.includes('::') ? k.slice(k.indexOf('::') + 2) : k;
+                emit(kind, rawKey, viewUrl(rec));
+            }
+        }
+    }).catch(() => { /* 本地存储不可用时忽略 */ });
+}
+
 export function stats() {
     const c = (S && S.artCache) || {};
     return {
@@ -403,11 +447,14 @@ export function stats() {
     };
 }
 
-export function clearCache(kind) {
+export function clearCache(kind, withLocal = false) {
     if (!S) return;
     if (!S.artCache) S.artCache = {};
     if (kind) S.artCache[kind] = {};
     else S.artCache = { bg: {}, char: {}, item: {}, cg: {} };
     try { clearChromaCache(); } catch (e) { /* 抠色缓存清不掉也不影响 */ }
     saveSettings();
+    if (withLocal) {
+        try { localstore.clearChat(getChatKey()); } catch (e) { /* 忽略 */ }
+    }
 }

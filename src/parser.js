@@ -698,24 +698,81 @@ function parseSmart(text, knownNames) {
     return script;
 }
 
-// 智能模式兜底：识别结尾的「选项列表」，转成可点选项
-// 支持 1. / 1、/ 1) / A. / - / * / • 等常见列表格式，且必须连续出现 2 条以上
-const OPT_LINE_RE = /^\s*(?:([1-9１-９]|[A-Da-d])\s*[.、)．:：]\s*|[-*•·]\s*)(.{1,40})$/;
-const OPT_LABEL_RE = /^(选项|你的选择|请选择|如何行动|你要怎么做|选择|下一步)[：:]?$/;
+// 智能模式：抓取 AI 写出来的「行动选项」，转成可点按钮。
+// 目标：只要 AI 明确列了 2 条以上备选行动，就直接抓过来，不要再退化成
+// 「回应/观察四周/静观其变」这种通用项（用户明确要求「有生成选项就直接抓」）。
+//
+// 支持格式（行首编号，2 条以上连续出现即可）：
+//   1. / 1、/ 1) / 1： / (1) / （1） / ① / 一、/ 一）
+//   A. / A、/ A： / a) / （A）
+//   - / * / • / · / ▸ 等无序符号
+//   加粗 **1. 选项**、`1. 选项`、[选项] 前缀也会被剥掉。
+// 另外支持两种「标题式」：**选项一：内容** / 选项1：内容 —— 正文里内联出现也能抓。
+const OPT_NUM = '(?:[1-9０-９]|[A-Da-d]|[一二三四五六七八九十]|[①②③④⑤⑥⑦⑧⑨⑩])';
+const OPT_LINE_RE = new RegExp(
+    '^\\s*(?:'
+    // 编号 + 标点：1. / 1、/ 1：/ 一、/ （1）、
+    + '(?:[（(]?\\s*' + OPT_NUM + '\\s*[）)]?\\s*[.、．：:,，]\\s*)'
+    // 圈号直接跟内容：① 走左边
+    + '|(?:[①②③④⑤⑥⑦⑧⑨⑩]\\s+)'
+    // 括号编号 + 空格（无标点）：(1) 走左边
+    + '|(?:[（(]\\s*' + OPT_NUM + '\\s*[）)]\\s+)'
+    // 无序符号
+    + '|(?:[-*•·▪▸►]\\s+)'
+    + ')(.{1,60})$'
+);
+const OPT_LABEL_RE = /^(选项|你的选择|请选择|如何行动|你要怎么做|你要做什么|选择|下一步|接下来|可选行动|行动选项|你的行动)[：:]?$/;
+// 「选项一：去做某事」这类：标题和内容在同一行
+const OPT_INLINE_RE = /^(?:选项|选择|行动|方案|行动选项)\s*[：:]?\s*([一二三四五六七八九十1-9０-９A-Da-d①②③④⑤⑥⑦⑧⑨⑩])[.、．：:,，]?\s*(.{1,60})$/;
+
+function cleanOptText(s) {
+    return String(s || '')
+        .replace(/^[*`_~\[\]【】\s]+/, '')
+        .replace(/[*`_~\s]+$/, '')
+        .replace(/[.。；;]+$/, '')
+        .trim();
+}
+
+// 去掉 markdown 加粗/代码符号后再判定编号，避免 **1. xxx** 漏抓
+function optTextOf(line) {
+    const s = String(line || '').replace(/[*`_~]/g, '').trim();
+    const m = OPT_LINE_RE.exec(s);
+    if (m && m[1] && m[1].trim()) return cleanOptText(m[1]);
+    const im = OPT_INLINE_RE.exec(s);
+    if (im && im[2] && im[2].trim()) return cleanOptText(im[2]);
+    return null;
+}
 
 function splitTrailingOptions(lines) {
-    const options = [];
-    let cut = lines.length;
+    // 从结尾往前找连续选项行（跳过纯标题行，但不跳过正文）
+    const picked = [];   // { i, text }
     for (let i = lines.length - 1; i >= 0; i--) {
-        const m = OPT_LINE_RE.exec(lines[i]);
-        if (!m) break;
-        options.unshift(m[2].trim());
-        cut = i;
+        if (OPT_LABEL_RE.test(lines[i].trim())) continue; // 标题行不算正文，继续往上
+        const t = optTextOf(lines[i]);
+        if (!t) break;
+        picked.unshift({ i, text: t });
     }
-    if (options.length < 2) return { options: [], rest: lines };
-    const rest = lines.slice(0, cut);
-    while (rest.length && OPT_LABEL_RE.test(rest[rest.length - 1].trim())) rest.pop();
-    return { options, rest };
+    let run = picked;
+    // 选项不在最末尾（后面还有旁白/时间戳等）时，全文扫一遍找最长的一段连续选项
+    if (run.length < 2) {
+        let best = [];
+        let cur = [];
+        for (let i = 0; i < lines.length; i++) {
+            const t = OPT_LABEL_RE.test(lines[i].trim()) ? null : optTextOf(lines[i]);
+            if (t) cur.push({ i, text: t });
+            else { if (cur.length > best.length) best = cur; cur = []; }
+        }
+        if (cur.length > best.length) best = cur;
+        if (best.length >= 2) run = best;
+    }
+    if (run.length < 2) return { options: [], rest: lines };
+    // 只把真正抓到选项的行从正文移除；标题行也一起移除（它在选项正上方或夹在中间）
+    const idx = new Set(run.map(p => p.i));
+    let cut = run[0].i;
+    // 往上吃掉紧邻的标题行
+    while (cut - 1 >= 0 && OPT_LABEL_RE.test(lines[cut - 1].trim())) { cut--; idx.add(cut); }
+    const rest = lines.filter((_, i) => !idx.has(i));
+    return { options: run.map(p => p.text).slice(0, 4), rest };
 }
 
 // ---------- 兜底行动项 ----------

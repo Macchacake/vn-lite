@@ -4,7 +4,9 @@
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-// 选择题：点选后高亮；可选发送到聊天
+// 选择题：第一次点=选中高亮，第二次点同一个=确认发送。
+// 为什么要两次：手机上误触很多，一碰就把行动发给 AI 会骑虎难下；
+// 先选中再确认，玩家有一次反悔机会（点别的选项可直接改选）。
 function renderChoices(container, opts, cfg) {
     const wrap = document.createElement('div');
     wrap.className = 'vnl-choices';
@@ -14,21 +16,49 @@ function renderChoices(container, opts, cfg) {
         note.textContent = cfg.note;
         wrap.appendChild(note);
     }
-    let picked = false;
+    let picked = false;      // 已确认发送
+    let armed = null;        // 已选中、等待二次确认的按钮
+    const willSend = !!(cfg && cfg.send && cfg.sendUserMessage);
+    const hint = document.createElement('div');
+    hint.className = 'vnl-choice-hint';
+    hint.textContent = willSend ? '点选行动，再点一次确认发送' : '点选行动，再点一次确认';
+    wrap.appendChild(hint);
+
+    function disarm() {
+        for (const b of wrap.querySelectorAll('.vnl-choice-btn')) {
+            b.classList.remove('armed');
+            b.textContent = b.dataset.opt || '';
+        }
+        armed = null;
+    }
+
     for (const opt of opts) {
         const btn = document.createElement('button');
         btn.className = 'vnl-choice-btn';
         btn.textContent = opt;
+        btn.dataset.opt = opt;
         btn.addEventListener('click', e => {
             e.stopPropagation();
             if (picked) return;
+            // 第一次点（或点另一个选项）：只选中，不发送
+            if (armed !== btn) {
+                disarm();
+                armed = btn;
+                btn.classList.add('armed');
+                btn.textContent = '✓ ' + opt + (willSend ? '　（再点一次发送）' : '　（再点一次确认）');
+                hint.textContent = willSend
+                    ? '再点一次高亮的行动即可发送；点别的行动可改选'
+                    : '再点一次高亮的行动即可继续；点别的行动可改选';
+                return;
+            }
+            // 第二次点同一个：确认发送
             picked = true;
             btn.classList.add('picked');
-            wrap.querySelectorAll('.vnl-choice-btn').forEach(b => { if (b !== btn) b.style.opacity = '0.4'; });
+            hint.textContent = willSend ? '已发送，等待剧情继续…' : '继续…';
             if (cfg.send && cfg.sendUserMessage) {
                 try { cfg.sendUserMessage(opt); } catch (err) { console.warn('[VN-Lite] 发送选择失败', err); }
             }
-            setTimeout(() => cfg.onPick && cfg.onPick(opt), 600);
+            setTimeout(() => cfg.onPick && cfg.onPick(opt), 350);
         });
         wrap.appendChild(btn);
     }

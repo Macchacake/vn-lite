@@ -16,12 +16,15 @@ import {
     getThumbnailUrl,
     generateQuietPrompt,
 } from '../../../../script.js';
+// 命名空间导入：即使某些酒馆版本没有导出 sendTextareaMessage 也不会让整个插件加载失败
+import * as ST from '../../../../script.js';
 import { extension_settings } from '../../../../scripts/extensions.js';
 import { groups, selected_group } from '../../../../scripts/group-chats.js';
 
 import * as settings from './src/settings.js';
 import * as art from './src/art.js';
 import * as gallery from './src/gallery.js';
+import * as session from './src/session.js';
 import { parseMessage, resetLearned } from './src/parser.js';
 import * as looks from './src/looks.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
@@ -75,6 +78,22 @@ function getCtxInfo(extra) {
         members,
         chunk: settings.get().chunk || 60,
     }, extra || {});
+}
+
+// ---------- 当前对话标识（本地图片按对话隔离用） ----------
+// getCurrentChatDetails().sessionName 是酒馆为每段聊天分配的稳定文件名，
+// 同一角色新建聊天会换名，群聊用 chat_id。拿不到时退回角色名，保证不串台。
+function syncChatKey() {
+    let key = '';
+    try {
+        const d = typeof ST.getCurrentChatDetails === 'function' ? ST.getCurrentChatDetails() : null;
+        if (d && d.sessionName) key = d.sessionName;
+    } catch (e) { /* 版本差异：忽略 */ }
+    if (!key) key = (String(name2 || '') || 'chat') + '::' + String(name1 || '');
+    session.setChatKey(key);
+    // 切换/初始化后，把这段对话已存到手机的图重建出来
+    try { art.hydrateChat(); } catch (e) { /* 本地存储不可用不影响演出 */ }
+    return key;
 }
 
 // ---------- 素材解析：映射表 → 角色头像 → null（剪影） ----------
@@ -225,13 +244,36 @@ function scriptCharNames(script) {
 }
 
 // ---------- 发送玩家选择 ----------
+// 关键：真正发起 AI 请求要走酒馆导出的 sendTextareaMessage()，
+// 它内部会调用 Generate()（读输入框内容 → 发 API 请求 → 出消息）。
+// 之前只模拟点 #send_but，在部分手机酒馆版本上按钮 id 不同 / 被遮挡 / 事件没绑上，
+// 结果选项点了没反应、也不发请求。这里优先直接调函数，模拟点按钮只作为兜底。
+let _sending = false;
 function sendUserMessage(text) {
     const ta = document.querySelector('#send_textarea');
     if (!ta) return;
+    if (_sending) return;              // 连点保护：一次选择只发一条
+    _sending = true;
     ta.value = text;
     ta.dispatchEvent(new Event('input', { bubbles: true }));
-    const btn = document.querySelector('#sendbut') || document.querySelector('#send_but');
-    if (btn) btn.click();
+    let sent = false;
+    try {
+        const sendFn = ST.sendTextareaMessage;
+        if (typeof sendFn === 'function') {
+            const r = sendFn();                // 内部 await Generate()，真正发 AI 请求
+            if (r && typeof r.catch === 'function') r.catch(e => console.warn('[VN-Lite] AI 请求失败', e));
+            sent = true;
+        }
+    } catch (e) {
+        console.warn('[VN-Lite] sendTextareaMessage 不可用，回退按钮', e);
+    }
+    if (!sent) {
+        const btn = document.querySelector('#sendbut') || document.querySelector('#send_but');
+        if (btn) btn.click();
+        else { console.warn('[VN-Lite] 找不到发送按钮'); _sending = false; return; }
+    }
+    // 生成结束后由 GENERATION_ENDED 复位；这里留一个较长兜底，防止异常卡死
+    setTimeout(() => { _sending = false; }, 30000);
 }
 
 // ---------- 环境工厂（每次挂载取最新设置） ----------
@@ -400,6 +442,8 @@ async function init() {
     // 美术总监 / 图集：共享同一份设置对象
     art.init(settings.get());
     gallery.init(settings.get());
+    // 绑定当前对话（本地图片按对话隔离）；图集/缓存都从这里取 scope
+    syncChatKey();
 
     // BGM 初始状态 + 解锁
     bgm.setEnabled(settings.get().bgmOn);
@@ -420,11 +464,16 @@ async function init() {
     eventSource.on(event_types.GENERATION_STARTED, () => { generating = true; });
     eventSource.on(event_types.GENERATION_ENDED, () => {
         generating = false;
+        _sending = false;   // 一次请求结束，解除连点保护
         setTimeout(() => appendLatestToTheater(), 400);
     });
+    // 生成失败/中断也要解锁，否则下一次选择发不出去
+    eventSource.on(event_types.GENERATION_STOPPED, () => { _sending = false; });
+    eventSource.on(event_types.CHAT_CHANGED, () => { _sending = false; });
 
     // 新消息（非流式 / 首条消息）
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
+        _sending = false;       // 收到消息说明这次发送已完成
         if (generating) return; // 流式结束时由 GENERATION_ENDED 处理
         setTimeout(() => appendLatestToTheater(), 300);
     });
@@ -434,7 +483,8 @@ async function init() {
         closeTheater();
         stopWatcher();
         _appendedSig = '';
-        resetLearned();   // 换聊天了，学到的角色名清空，避免串味
+        resetLearned();      // 换聊天了，学到的角色名清空，避免串味
+        syncChatKey();       // 换对话 → 切到这段对话自己的本地图集/缓存
     });
 
     console.log('[VN-Lite] 文游Lite 已加载：' + settings.get().mode + ' 模式');

@@ -373,11 +373,11 @@ function bindPanel(wrap, hooks) {
     const clearBtn = wrap.querySelector('#vnl-art-clear');
     if (clearBtn) {
         clearBtn.addEventListener('click', async () => {
-            if (!confirm('清空素材缓存？下次演出会重新生成（ComfyUI 里的文件不会删）。')) return;
+            if (!confirm('清空本对话的素材缓存和手机本地图片？下次演出会重新生成并下载。其它对话不受影响，ComfyUI 上的文件不会删。')) return;
             const { clearCache } = await import('./art.js');
-            clearCache();
+            clearCache(null, true);
             refreshStats();
-            flash(wrap, '素材缓存已清空');
+            flash(wrap, '本对话素材缓存与本地图片已清空');
         });
     }
     const galBtn = wrap.querySelector('#vnl-open-gallery');
