@@ -14,6 +14,7 @@ import {
     saveSettingsDebounced,
     setExtensionPrompt,
     getThumbnailUrl,
+    generateQuietPrompt,
 } from '../../../../script.js';
 import { extension_settings } from '../../../../scripts/extensions.js';
 import { groups, selected_group } from '../../../../scripts/group-chats.js';
@@ -22,7 +23,6 @@ import * as settings from './src/settings.js';
 import * as art from './src/art.js';
 import * as gallery from './src/gallery.js';
 import { parseMessage, resetLearned } from './src/parser.js';
-import { guessGender } from './src/styles.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
 import { buildProtocol } from './src/protocol.js';
 import { bgm } from './src/bgm.js';
@@ -61,26 +61,9 @@ function currentCharacters() {
     return out;
 }
 
-// 角色性别：卡片 gender 字段 → 正文里「他/她」的出现次数
-function genderOfCard(c) {
-    if (!c) return null;
-    const direct = guessGender(c.gender);
-    if (direct) return direct;
-    return guessGender([c.description, c.personality, c.scenario, c.mes_example].filter(Boolean).join(' '));
-}
-
-function buildGenderMap() {
-    const map = {};
-    for (const c of currentCharacters()) {
-        const g = genderOfCard(c);
-        if (g) map[c.name] = g;
-    }
-    return map;
-}
-
-// 设置面板用：列出可指定性别的角色
+// 设置面板用：列出当前聊天里的角色名，方便逐个填英文提示词
 function knownChars() {
-    return currentCharacters().slice(0, 60).map(c => ({ name: c.name, gender: genderOfCard(c) }));
+    return currentCharacters().slice(0, 60).map(c => ({ name: c.name }));
 }
 
 function getCtxInfo(extra) {
@@ -110,6 +93,66 @@ function resolveChar(name) {
     return null;
 }
 
+// ---------- 角色外观：吸收 AI 写的 [look:] 标签 ----------
+// AI 看过角色卡，它写出来的外观标签比插件瞎猜靠谱得多。
+// 用户手动改过的提示词优先级更高，不再被覆盖。
+function absorbLooks(script) {
+    if (!script || !script.looks) return;
+    const S = settings.get();
+    if (!S.artPrompts) S.artPrompts = {};
+    if (!S.lookAuto) S.lookAuto = {};
+    let changed = false;
+    for (const [name, tags] of Object.entries(script.looks)) {
+        const cur = S.artPrompts[name];
+        const autoOwned = S.lookAuto[name] === true;
+        if (cur && !autoOwned) continue;      // 用户自己写的，别动
+        if (cur === tags) continue;
+        S.artPrompts[name] = tags;
+        S.lookAuto[name] = true;
+        if (S.artCache && S.artCache.char) delete S.artCache.char[name];
+        changed = true;
+    }
+    if (changed) settings.save();
+}
+
+// ---------- 让 AI 写角色外观标签 ----------
+async function generateLooks() {
+    const S = settings.get();
+    if (!S.artPrompts) S.artPrompts = {};
+    if (!S.lookAuto) S.lookAuto = {};
+    const chars = currentCharacters().slice(0, 40);
+    if (!chars.length) return { ok: 0, total: 0, reason: '当前没有角色' };
+    let ok = 0;
+    for (const c of chars) {
+        if (S.artPrompts[c.name] && S.lookAuto[c.name] !== true) continue;  // 用户写过的跳过
+        const desc = [c.description, c.personality, c.scenario].filter(Boolean).join('\n').slice(0, 1500);
+        const q = `你是 Danbooru 标签专家。根据角色设定，写一条用于生成该角色「全身立绘」的英文标签串。
+
+只输出标签本身：英文逗号分隔，一行，不要解释、不要引号、不要编号。
+顺序固定：1girl 或 1boy → 发色与发型 → 瞳色 → 体型 → 年龄感 → 服装（颜色+款式）→ 显著特征。
+不要写表情、不要写背景、不要写镜头角度、不要写画风词。
+
+角色名：${c.name}
+角色设定：
+${desc || '（这张卡没有写外观，请按名字给一个合理的日系角色外观）'}`;
+        try {
+            let out = await generateQuietPrompt(q, true, true);
+            out = String(out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+            out = out.replace(/^["'`]+|["'`]+$/g, '').replace(/^(tags?|标签)[:：]\s*/i, '').trim();
+            if (!out) continue;
+            if (!/^1(boy|girl|other)\b/i.test(out)) out = '1girl, ' + out;
+            S.artPrompts[c.name] = out;
+            S.lookAuto[c.name] = true;
+            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
+            ok++;
+        } catch (e) {
+            console.warn('[VN-Lite] 生成外观标签失败：' + c.name, e && e.message);
+        }
+    }
+    settings.save();
+    return { ok, total: chars.length };
+}
+
 // ---------- 发送玩家选择 ----------
 function sendUserMessage(text) {
     const ta = document.querySelector('#send_textarea');
@@ -128,11 +171,13 @@ function envFactory() {
         userName: name1,
         resolveChar,
         knownChars,
+        generateLooks,
         sendUserMessage,
         // CG 绘画：先查缓存，再按需生成（URL/开关实时生效）
         sd: (prompt) => art.cg(prompt),
         openTheater: (script) => {
             openTheater([{ script, title: name2 || '演出' }], envFactory);
+            startWatcher();
         },
     };
 }
@@ -142,22 +187,45 @@ let generating = false;
 
 // ---------- 剧场同层追加（不退出剧场继续剧情） ----------
 let _appendedSig = '';
-function appendLatestToTheater() {
-    let last = null, lastId = -1;
+
+// 找出最后一条 AI 消息（含它的唯一签名）
+function lastAiMsg() {
     for (let i = chat.length - 1; i >= 0; i--) {
         const m = chat[i];
-        if (m && !m.is_user && m.mes && m.mes.trim()) { last = m; lastId = i; break; }
+        if (m && !m.is_user && m.mes && m.mes.trim()) {
+            return { msg: m, id: i, sig: i + ':' + (m.swipe_id ?? 0) + ':' + m.mes.length };
+        }
     }
-    if (!last) return;
-    const sig = lastId + ':' + (last.swipe_id ?? '') + ':' + last.mes.length;
-    if (sig === _appendedSig) return; // 同一条消息（流式/重复事件）不重复追加
-    _appendedSig = sig;
+    return null;
+}
+
+// 返回 true 表示「确实追加了一幕」，false 表示没有新东西
+function appendLatestToTheater() {
+    const hit = lastAiMsg();
+    if (!hit) return false;
+    if (hit.sig === _appendedSig) return false; // 同一条消息（流式/重复事件）不重复追加
+    _appendedSig = hit.sig;
     const S = settings.get();
-    const script = parseMessage(last.mes, getCtxInfo({ autoChoice: !!S.autoChoice }));
-    if (script && script.usable) {
-        appendTheater(script, name2 || '演出');
-        try { art.prefetch(script); } catch (e) { /* 预生成失败不影响演出 */ }
-    }
+    const script = parseMessage(hit.msg.mes, getCtxInfo({ autoChoice: !!S.autoChoice }));
+    if (!script || !script.usable) return false;
+    absorbLooks(script);
+    const added = appendTheater(script, name2 || '演出');
+    try { art.prefetch(script); } catch (e) { /* 预生成失败不影响演出 */ }
+    return !!added;
+}
+
+// 兜底轮询：手机端酒馆的 GENERATION_ENDED / MESSAGE_RECEIVED 偶尔漏发，
+// 只要剧场开着就每秒对一次 chat，保证「点了选项一定会往下走」。
+let _watchTimer = null;
+function startWatcher() {
+    if (_watchTimer) return;
+    _watchTimer = setInterval(() => {
+        if (!isOpen()) { stopWatcher(); return; }
+        try { appendLatestToTheater(); } catch (e) { /* 忽略单次异常 */ }
+    }, 1000);
+}
+function stopWatcher() {
+    if (_watchTimer) { clearInterval(_watchTimer); _watchTimer = null; }
 }
 
 // ---------- 文游模式入口 ----------
@@ -174,15 +242,19 @@ function buildTheaterItems() {
         // 只有最后一幕补兜底行动项，历史幕保持原样
         const last = k === recent.length - 1;
         const script = parseMessage(chat[recent[k]].mes, getCtxInfo({ autoChoice: last && !!S.autoChoice }));
-        if (script && script.usable) items.push({ script, title: name2 || '演出' });
+        if (script && script.usable) { absorbLooks(script); items.push({ script, title: name2 || '演出' }); }
     }
     return items;
 }
 
 function enterVnMode() {
     if (isOpen()) return;
-    art.setGenders(buildGenderMap());   // 进文游前刷新角色性别表
-    openTheater(buildTheaterItems(), envFactory, { startAtEnd: true });
+    const items = buildTheaterItems();
+    // 进剧场时最后一条已经在 items 里演过了，先记下签名，避免兜底轮询又追加一遍
+    const hit = lastAiMsg();
+    _appendedSig = hit ? hit.sig : '';
+    openTheater(items, envFactory, { startAtEnd: true });
+    startWatcher();
 }
 
 // 在右下角魔棒菜单里加一个入口
@@ -252,7 +324,6 @@ async function init() {
 
     // 美术总监 / 图集：共享同一份设置对象
     art.init(settings.get());
-    art.setGenders(buildGenderMap());
     gallery.init(settings.get());
 
     // BGM 初始状态 + 解锁
@@ -286,9 +357,9 @@ async function init() {
     // 聊天切换：退出文游，回到原聊天
     eventSource.on(event_types.CHAT_CHANGED, () => {
         closeTheater();
+        stopWatcher();
         _appendedSig = '';
         resetLearned();   // 换聊天了，学到的角色名清空，避免串味
-        art.setGenders(buildGenderMap());
     });
 
     console.log('[VN-Lite] 文游Lite 已加载：' + settings.get().mode + ' 模式');

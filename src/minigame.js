@@ -28,7 +28,7 @@ function renderChoices(container, opts, cfg) {
             if (cfg.send && cfg.sendUserMessage) {
                 try { cfg.sendUserMessage(opt); } catch (err) { console.warn('[VN-Lite] 发送选择失败', err); }
             }
-            setTimeout(() => cfg.onPick && cfg.onPick(), 600);
+            setTimeout(() => cfg.onPick && cfg.onPick(opt), 600);
         });
         wrap.appendChild(btn);
     }

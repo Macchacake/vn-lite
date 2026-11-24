@@ -139,13 +139,47 @@ function pickModel(models) {
         || models[0];
 }
 
+// ---------- 服务端抠图（ComfyUI 0.37+ 原生 BiRefNet） ----------
+// 有就用，没有就退回前端抠色，不影响任何流程。
+const _matteCache = new Map();   // base -> { model } | null
+
+async function matteInfo(base) {
+    if (_matteCache.has(base)) return _matteCache.get(base);
+    let info = null;
+    try {
+        const r = await fetch(base + '/object_info/RemoveBackground', { signal: timeoutSignal(4000) });
+        if (r.ok) {
+            const j = await r.json();
+            if (j && j.RemoveBackground) {
+                const mr = await fetch(base + '/object_info/LoadBackgroundRemovalModel', { signal: timeoutSignal(4000) });
+                const mj = mr.ok ? await mr.json() : null;
+                const list = mj && mj.LoadBackgroundRemovalModel &&
+                    mj.LoadBackgroundRemovalModel.input && mj.LoadBackgroundRemovalModel.input.required &&
+                    mj.LoadBackgroundRemovalModel.input.required.bg_removal_name &&
+                    mj.LoadBackgroundRemovalModel.input.required.bg_removal_name[0];
+                if (Array.isArray(list) && list.length) info = { model: list[0] };
+            }
+        }
+    } catch (e) { info = null; }
+    _matteCache.set(base, info);
+    return info;
+}
+
+export async function hasMatte(base) {
+    const b = normalizeBase(base);
+    if (!b) return false;
+    return !!(await matteInfo(b));
+}
+
 // ---------- 最小工作流（API 格式） ----------
 // 尺寸由调用方按用途传入（立绘竖长条 / 背景横图 / 图标方图）
 const NEG_BASE = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry';
 
-function buildWorkflow(model, prompt, opts = {}) {
+function buildWorkflow(model, prompt, opts = {}, matte = null) {
     const isXL = /xl/i.test(model);
-    const seed = Math.random() * 4294967295 >>> 0;
+    // 同一个角色必须用同一个种子，否则每次重画都换一张脸，
+    // 观众会觉得「立绘根本不贴合人物」。opts.seed 由 art.js 按 kind|key 派生。
+    const seed = Number.isFinite(opts.seed) ? (opts.seed >>> 0) : (Math.random() * 4294967295 >>> 0);
     // Animagine XL 4.0 官方规范：质量标签放最后 + 官方完整负向，CFG 5 / 28 步
     const pos = prompt + ', masterpiece, high score, great score, absurdres';
     const neg = [opts.negative, NEG_BASE].filter(Boolean).join(', ');
@@ -160,21 +194,30 @@ function buildWorkflow(model, prompt, opts = {}) {
         '7': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['4', 1] } },
         '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
     };
-    // 透明底不在这里做：ComfyUI 的 ImageColorToMask 是精确颜色匹配，
-    // 而模型画的绿幕一定带渐变，匹配不到；改成前端 chroma.js 抠色（魔棒漫水）。
-    wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: opts.transparent ? 'vnl_char' : 'vnl_cg', images: ['8', 0] } };
+    if (opts.transparent && matte) {
+        // ComfyUI 0.37+ 原生 BiRefNet：RemoveBackground 出「前景掩膜」，
+        // JoinImageWithAlpha 的 alpha 语义是「透明度」，所以先取反。
+        wf['10'] = { class_type: 'LoadBackgroundRemovalModel', inputs: { bg_removal_name: matte.model } };
+        wf['11'] = { class_type: 'RemoveBackground', inputs: { bg_removal_model: ['10', 0], image: ['8', 0] } };
+        wf['12'] = { class_type: 'InvertMask', inputs: { mask: ['11', 0] } };
+        wf['13'] = { class_type: 'JoinImageWithAlpha', inputs: { image: ['8', 0], alpha: ['12', 0] } };
+        wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: 'vnl_char', images: ['13', 0] } };
+    } else {
+        wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: opts.transparent ? 'vnl_char' : 'vnl_cg', images: ['8', 0] } };
+    }
     return wf;
 }
 
 // ---------- 单个地址上的完整生成流程 ----------
 async function tryGenerateOn(base, prompt, S, opts = {}) {
-    const key = base + '::' + prompt + '::' + (opts.w || 0) + 'x' + (opts.h || 0) + (opts.transparent ? '|a' + (opts.keyColor || 'green') : '');
+    const key = base + '::' + prompt + '::' + (opts.w || 0) + 'x' + (opts.h || 0) + (opts.transparent ? '|a' + (opts.keyColor || 'green') : '') + '|s' + (opts.seed >>> 0 || 0);
     if (_imgCache.has(key)) return { url: _imgCache.get(key) };
     try {
         const models = await listModels(base);
         const model = S.sdModel && models.includes(S.sdModel) ? S.sdModel : pickModel(models);
         const isXL = /xl/i.test(model);
-        const wf = buildWorkflow(model, prompt, opts);
+        const mi = opts.transparent ? await matteInfo(base) : null;
+        const wf = buildWorkflow(model, prompt, opts, mi);
 
         const pr = await fetch(base + '/prompt', {
             method: 'POST',

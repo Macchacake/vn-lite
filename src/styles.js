@@ -10,56 +10,48 @@ export const STYLE_PRESETS = {
         desc: '细腻描边 + 柔光 + 闪粉，男性角色清秀俊美',
         tail: 'delicate lineart, soft gradient shading, pastel color palette, sparkle, floating particles, bokeh, backlighting, romantic atmosphere, beautiful detailed eyes, elegant',
         neg: 'harsh shadows, gritty, muscular, ugly, deformed',
-        maleBoost: 'bishounen, slender, handsome, elegant',
     },
     shoujo: {
         label: '少女漫（网点漫画）',
         desc: '网点、速度线、大眼睛、高对比描边',
         tail: 'shoujo, manga style, screentone, halftone, speed lines, large expressive eyes, thick lineart, high contrast, flower motif, sparkle',
         neg: 'photorealistic, 3d, cgi',
-        maleBoost: 'bishounen, tall, slender, handsome',
     },
     cel: {
         label: '赛璐璐动画（番剧截图）',
         desc: '平涂、清晰描边、颜色鲜艳，像 TV 动画截图',
         tail: 'cel shading, flat color, clean lineart, anime screencap, vibrant colors, sharp shadows, tv anime, official art',
         neg: 'painterly, sketch, rough lines',
-        maleBoost: 'handsome, sharp eyes',
     },
     webtoon: {
         label: '韩系条漫（网漫）',
         desc: '干净线稿 + 渐变上色，韩式乙女漫常见画法',
         tail: 'webtoon style, manhwa, clean lineart, soft cel shading, gradient shading, glossy hair, tall proportions, romance comic, detailed eyes',
         neg: 'chibi, rough sketch',
-        maleBoost: 'handsome, tall, broad shoulders, korean comic style',
     },
     painterly: {
         label: '厚涂（半写实）',
         desc: '笔触厚重、光影戏剧化，偏概念设定图',
         tail: 'painterly, thick brush strokes, semi-realistic, detailed skin, dramatic lighting, rich colors, chiaroscuro, concept art',
         neg: 'flat color, cel shading, chibi',
-        maleBoost: 'handsome, mature, defined jawline',
     },
     watercolor: {
         label: '水彩（轻小说插画）',
         desc: '水彩晕染、纸纹、色调柔和',
         tail: 'watercolor (medium), soft washes, paper texture, light novel illustration, gentle colors, wet on wet, blooming, soft edges',
         neg: 'harsh lines, neon, 3d',
-        maleBoost: 'handsome, gentle expression',
     },
     gothic: {
         label: '暗黑哥特',
         desc: '低饱和、深阴影、血色点缀，适合悬疑/吸血鬼题材',
         tail: 'dark fantasy, gothic, moody lighting, deep shadows, desaturated, crimson accent, ornate, elegant, dramatic, chiaroscuro',
         neg: 'bright pastel, cheerful, chibi',
-        maleBoost: 'handsome, pale skin, sharp eyes, elegant',
     },
     retro: {
         label: '复古 90 年代动画',
         desc: '颗粒感、褪色调、老动画质感',
         tail: 'retro artstyle, 1990s (style), film grain, muted colors, vintage anime, soft vignette, retro color palette',
         neg: 'modern digital, glossy, 3d',
-        maleBoost: 'handsome, retro anime style',
     },
 };
 
@@ -116,32 +108,6 @@ export const SIZE = {
     item: [1024, 1024],  // 1:1 图标
     cg: [1216, 832],
 };
-
-// 性别 → 正向 / 负向标签
-// 负向里放异性标签是纠正「男生画成女生」最有效的一招
-export const GENDER = {
-    male: { pos: '1boy, male', neg: '1girl, female, breasts, feminine' },
-    female: { pos: '1girl, female', neg: '1boy, male' },
-};
-
-// 从任意文本里猜性别（卡片 gender 字段为空时的兜底）
-export function guessGender(text) {
-    const s = String(text || '');
-    if (!s) return null;
-    const m = s.match(/^[\s]*([a-zA-Z\u4e00-\u9fa5]+)/);
-    const head = m ? m[1].toLowerCase() : '';
-    if (/^(m|male|man|boy|男)/.test(head)) return 'male';
-    if (/^(f|female|woman|girl|女)/.test(head)) return 'female';
-    // 中文字数统计：他 / 她
-    let he = 0, she = 0;
-    for (const ch of s) {
-        if (ch === '他') he++;
-        else if (ch === '她') she++;
-    }
-    if (he >= 3 && he > she * 1.6) return 'male';
-    if (she >= 3 && she > he * 1.6) return 'female';
-    return null;
-}
 
 // 立绘提示词模板（默认全身）
 export const DEFAULT_PORTRAIT_TPL =

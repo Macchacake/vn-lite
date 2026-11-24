@@ -75,6 +75,9 @@ function createStage(script, env) {
         ptr: -1,          // 已处理的 segment 下标
         onStage: new Map(), // name -> {expr, node}
         interactive: false, // choice/qte 等待中，点击不推进
+        awaiting: false,    // 已把行动发给 AI，正在等下一段剧情
+        waitTimer: null,
+        lastPick: '',
         ended: false,
         disposed: false,
     };
@@ -173,6 +176,13 @@ function createStage(script, env) {
         img.dataset.gen = r.gen ? '1' : '0';
         img.dataset.alpha = r.alpha ? '1' : '0';
         img.src = r.src;
+        // 图挂了（ComfyUI 重启 / 文件被清）→ 退回剪影，别留一个破图标
+        img.addEventListener('error', () => {
+            if (img.dataset.fellback) return;
+            img.dataset.fellback = '1';
+            img.dataset.gen = '0'; img.dataset.alpha = '0';
+            img.src = silhouetteURI(name, expr);
+        });
         maybeChroma(img, r.src, r.alpha);
         // 既没有手动映射也没有 AI 图 → 现场排一张（预生成没覆盖到的角色兜底）
         if (!r.gen && !(env.resolveChar && env.resolveChar(name)) && S.sdOn && S.autoArt) {
@@ -262,7 +272,11 @@ function createStage(script, env) {
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
                 note: seg.synthetic ? 'AI 这次没给选项，下面是通用行动，也可以直接在下方输入框自己写。' : '',
-                onPick: () => advance(),
+                onPick: (opt) => {
+                    state.lastPick = opt || '';
+                    state.awaiting = !!(S.sendChoice && env.sendUserMessage);
+                    advance();
+                },
             });
             state.interactive = true;
         } else if (seg.t === 'qte') {
@@ -331,7 +345,7 @@ function createStage(script, env) {
                 okText: seg.okText, failText: seg.failText,
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
-                onDone: () => advance(),
+                onDone: () => { state.awaiting = !!(S.sendChoice && env.sendUserMessage); advance(); },
             });
             state.interactive = true;
         } else if (seg.t === 'input') {
@@ -341,7 +355,7 @@ function createStage(script, env) {
             renderInput(textEl, {
                 hint: seg.hint,
                 sendUserMessage: env.sendUserMessage,
-                onDone: () => advance(),
+                onDone: () => { state.awaiting = !!env.sendUserMessage; advance(); },
             });
             state.interactive = true;
         }
@@ -385,6 +399,8 @@ function createStage(script, env) {
         if (state.disposed) return;
         if (typerActive()) { finishTyper(); return; }
         if (state.interactive) return;
+        // 正在等 AI 写下一段：此时点屏幕不该重播本幕，否则玩家会以为卡住了
+        if (state.awaiting && state.ended) return;
         if (state.ended) { restart(); return; }
         do {
             state.ptr++;
@@ -402,6 +418,34 @@ function createStage(script, env) {
         stopTyper();
         nameEl.style.display = 'none';
         textEl.className = 'vnl-text vnl-narr';
+
+        if (state.awaiting) {
+            // 刚把玩家的选择发给 AI，正在等下一段 —— 不要显示「剧终」，
+            // 否则看起来像是卡住了
+            textEl.innerHTML = '<div class="vnl-waiting"><span class="vnl-cg-spin"></span>等待剧情继续…</div>';
+            const row = document.createElement('div');
+            row.className = 'vnl-endrow';
+            const again = document.createElement('button');
+            again.className = 'vnl-endbtn vnl-endbtn-dim';
+            again.textContent = '⏳ 没反应？重发这次选择';
+            again.addEventListener('click', e => {
+                e.stopPropagation();
+                if (env.sendUserMessage) env.sendUserMessage(state.lastPick || '继续');
+            });
+            const skip = document.createElement('button');
+            skip.className = 'vnl-endbtn vnl-endbtn-dim';
+            skip.textContent = '✕ 退出等待';
+            skip.addEventListener('click', e => {
+                e.stopPropagation();
+                state.awaiting = false;
+                showEnd(true);
+            });
+            row.append(again, skip);
+            textEl.appendChild(row);
+            if (!silent && typeof env.onEnd === 'function') env.onEnd();
+            return;
+        }
+
         textEl.textContent = '—— 剧终 ——';
         const row = document.createElement('div');
         row.className = 'vnl-endrow';
@@ -422,6 +466,7 @@ function createStage(script, env) {
 
     function restart() {
         state.ptr = -1; state.ended = false; state.interactive = false;
+        state.awaiting = false; state.lastPick = ''; clearTimeout(state.waitTimer);
         sprites.innerHTML = ''; state.onStage.clear();
         hideCG();
         hud.style.display = 'none'; hud.innerHTML = '';
@@ -495,7 +540,7 @@ function createStage(script, env) {
     setScene(script.scene || '室内');
     if (script.bgm) bgm.setMood(script.bgm);
 
-    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, get _ended() { return state.ended; }, dispose() { state.disposed = true; stopTyper(); offArt(); el.remove(); } };
+    return { el, next, jumpToEnd, restart, script, get _lastTextLen() { return lastTextLen; }, get _ended() { return state.ended; }, dispose() { state.disposed = true; clearTimeout(state.waitTimer); stopTyper(); offArt(); el.remove(); } };
 }
 
 // ---------- 挂载到消息 ----------

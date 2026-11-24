@@ -221,6 +221,9 @@ async function compute(url, opts) {
         return null;
     }
     const d = imgData.data;
+    // 服务端已经用 BiRefNet 抠好的图，四个角本来就是透明的 → 不要再动它
+    const corners = [0, (W - 1) * 4, (H - 1) * W * 4, ((H - 1) * W + W - 1) * 4];
+    if (corners.every(c => d[c + 3] < 8)) return null;
     const alpha = computeAlpha(d, W, H, opts || {});
     if (!alpha) return null;
     for (let i = 0; i < alpha.length; i++) d[i * 4 + 3] = alpha[i];
@@ -256,6 +259,3 @@ export function applyChroma(img, url, opts) {
 }
 
 export function clearChromaCache() { cache.clear(); }
-
-// 供测试使用
-export { computeAlpha, pickSeed };

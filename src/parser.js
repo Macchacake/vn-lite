@@ -190,7 +190,7 @@ function expandLongSegments(script, max) {
 // 兼容全角/半角括号、大小写、中英文冒号
 // 演出标签：scene/char/bgm/choice/qte/cg
 // 游戏系统标签：stats/item/quest/aff/dice/input（RPG Maker 风格）
-const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
+const TAG_LINE_RE = /^[\s>]*[\[【]\s*(scene|char|look|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]\s*([^\]】]*)[\]】]\s*/i;
 
 // 任务状态词 → 统一枚举
 const QUEST_ST = { '开始': 'start', '新': 'start', 'new': 'start', '接受': 'start', '进行': 'start', '完成': 'done', 'done': 'done', '达成': 'done', '失败': 'fail', 'fail': 'fail', '放弃': 'fail' };
@@ -211,6 +211,15 @@ function parseProtocol(text, knownNames) {
             const val = m[2].trim();
             line = line.slice(m[0].length);
             if (tag === 'scene') script.segments.push({ t: 'dir', scene: val });
+            else if (tag === 'look') {
+                // [look:角色名|英文外观标签] —— 给生图用的固定外观，不进演出
+                const [ln, lt] = val.split(/[|｜]/).map(x => x.trim());
+                if (ln && lt) {
+                    if (!script.looks) script.looks = {};
+                    script.looks[ln] = lt;
+                    learnNames([ln]);
+                }
+            }
             else if (tag === 'bgm') script.segments.push({ t: 'dir', bgm: val });
             else if (tag === 'char') {
                 const [name, expr] = val.split(/[|｜]/).map(x => x.trim());
@@ -277,7 +286,7 @@ function parseProtocol(text, knownNames) {
 }
 
 function hasProtocolTag(text) {
-    return /[\[【]\s*(scene|char|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
+    return /[\[【]\s*(scene|char|look|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
 }
 
 // ---------- 智能解析（零配置） ----------

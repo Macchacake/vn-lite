@@ -8,7 +8,7 @@
 import { generateCG } from './sd.js';
 import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
-import { styleOf, SIZE, GENDER, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
+import { styleOf, SIZE, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
 import { clearChromaCache } from './chroma.js';
 
 let S = null;                       // 当前设置对象（引用，实时生效）
@@ -16,13 +16,20 @@ const queue = [];                   // 待生成队列
 const queued = new Set();           // kind|key 去重
 let running = false;
 const listeners = new Set();
-let genders = {};                   // 角色名 → 'male' | 'female'（由 index.js 从角色卡读取）
 
-export function init(settings) { S = settings; }
+// 素材缓存版本：改了提示词结构 / 出图尺寸 / 透明底做法就 +1，
+// 旧图会整体作废，避免用户看到上一版留下的废图。
+const ART_VER = 4;
 
-// 角色卡里的性别信息（含手动覆盖）
-export function setGenders(map) {
-    genders = map && typeof map === 'object' ? map : {};
+export function init(settings) {
+    S = settings;
+    if (S && S.artVer !== ART_VER) {
+        S.artCache = { bg: {}, char: {}, item: {}, cg: {} };
+        S.gallery = [];
+        S.artVer = ART_VER;
+        saveSettings();
+        console.log('[VN-Lite] 素材缓存已按新版本重建');
+    }
 }
 
 export function onReady(fn) {
@@ -103,19 +110,13 @@ export function scenePrompt(cat) {
     return joinTags([base, 'no people, anime background, highly detailed', styleOf(S).tail]);
 }
 
-// 决定一个角色的性别：手动覆盖 > 角色卡 > 提示词里自己写的 > 猜不出
-export function genderOf(name, hint) {
-    const h = String(hint == null ? ((S && S.artPrompts && S.artPrompts[name]) || '') : hint);
-    if (/\b1girl\b|\bfemale\b/i.test(h)) return 'female';
-    if (/\b1boy\b|\bmale\b/i.test(h)) return 'male';
-    const manual = S && S.artGender && S.artGender[name];
-    if (manual === 'male' || manual === 'female') return manual;
-    const fromCard = genders[name];
-    if (fromCard === 'male' || fromCard === 'female') return fromCard;
-    return null;
-}
-
-const KEY_WORD = { green: 'green', blue: 'blue', magenta: 'magenta' };
+// 抠色专用的幕布描述：要「纯色、均匀、无渐变」，否则 flood fill 会被
+// 渐变和光晕带跑，边缘必然发毛。
+const KEY_SPEC = {
+    green: 'flat pure green background, solid chroma key green, uniform #00FF00 backdrop, completely flat color, no gradient',
+    blue: 'flat pure blue background, solid chroma key blue, uniform #0000FF backdrop, completely flat color, no gradient',
+    magenta: 'flat pure magenta background, solid chroma key magenta, uniform #FF00FF backdrop, completely flat color, no gradient',
+};
 
 function alphaOn() { return !!(S && S.portraitAlpha); }
 
@@ -123,28 +124,27 @@ export function charPrompt(name) {
     let tpl = (S && S.portraitTpl) || DEFAULT_PORTRAIT_TPL;
     const hint = (S && S.artPrompts && S.artPrompts[name]) || '';
     const st = styleOf(S);
-    const g = genderOf(name, hint);
-    const gTag = g ? GENDER[g].pos : '';
-    const boost = g === 'male' ? st.preset.maleBoost : '';
     let tail = st.tail;
     let bgTag = '';
     if (alphaOn()) {
-        // 抠色时：摘掉会画背景的标签，并把绿幕要求放到最前面（权重最高）
+        // 抠色时：摘掉会画背景的标签，再补一条纯色幕布要求。
+        // 注意顺序：角色外观必须排在最前面（权重最高），否则画出来不像本人。
         tail = stripBgTags(tail);
         tpl = tpl.replace(/simple background,?\s*/gi, '');
-        const w = KEY_WORD[S.portraitKey] || 'green';
-        bgTag = 'solid ' + w + ' background, plain background, chroma key, isolated on ' + w + ' background, no background';
+        bgTag = KEY_SPEC[S.portraitKey] || KEY_SPEC.green;
     }
-    return joinTags([gTag, bgTag, tpl, hint, boost, tail]);
+    // 顺序 = 权重：外观 > 构图 > 幕布 > 画风
+    return joinTags([hint, tpl, bgTag, tail]);
 }
 
 export function charNeg(name) {
-    const hint = (S && S.artPrompts && S.artPrompts[name]) || '';
     const st = styleOf(S);
-    const g = genderOf(name, hint);
     const parts = [st.preset.neg];
-    if (g) parts.push(GENDER[g].neg);
-    if (alphaOn()) parts.push('detailed background, scenery, gradient background, multiple views, multiple characters');
+    if (alphaOn()) {
+        parts.push('detailed background, scenery, gradient background, multiple views, multiple characters');
+        // 这些会把幕布画脏，是抠图失败的头号原因
+        parts.push('vignette, glow, backlighting, light rays, soft focus, depth of field, gradient, noise, texture, drop shadow, reflection');
+    }
     return parts.filter(Boolean).join(', ');
 }
 
@@ -158,6 +158,18 @@ export function itemPrompt(name) {
 export function portraitAlpha() { return alphaOn(); }
 
 // ---------- 队列 ----------
+// 稳定种子：同一个角色 / 场景 / 物品永远拿到同一个种子，
+// 这样反复重画也是同一张脸，不会「每次都是另一个人」。
+function hashSeed(str) {
+    let h = 2166136261 >>> 0;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+}
+
 export function ensure(kind, key, prompt, opts = {}) {
     if (!S || !key || !prompt) return false;
     if (!S.sdOn || !S.autoArt) return false;
@@ -174,6 +186,7 @@ export function ensure(kind, key, prompt, opts = {}) {
             negative: opts.negative || '',
             transparent: !!opts.transparent,
             keyColor: opts.keyColor || 'green',
+            seed: hashSeed(kind + '|' + key),
         },
     });
     pump();

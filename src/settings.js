@@ -40,7 +40,8 @@ const DEFAULTS = {
     portraitAlpha: true,   // 立绘透明底（抠色）
     portraitKey: 'green',  // 抠色用的背景色
     artPrompts: {},     // 角色/物品 → 额外英文提示词
-    artGender: {},      // 角色 → 手动指定性别 male/female
+    lookAuto: {},       // 记录哪些角色提示词是 AI 自动写的（可被覆盖）
+    artVer: 0,          // 素材缓存版本（art.js 里比对，不一致就整体重建）
     artCache: { bg: {}, char: {}, item: {}, cg: {} },
     gallery: [],        // 图集（只存 ComfyUI 文件名）
 };
@@ -58,7 +59,8 @@ function init(extSettings, saveFn, hooks = {}) {
     v.sdHistory = Array.isArray(v.sdHistory) ? v.sdHistory : [];
     v.sdModelList = Array.isArray(v.sdModelList) ? v.sdModelList : [];
     v.artPrompts = (v.artPrompts && typeof v.artPrompts === 'object') ? v.artPrompts : {};
-    v.artGender = (v.artGender && typeof v.artGender === 'object') ? v.artGender : {};
+    v.lookAuto = (v.lookAuto && typeof v.lookAuto === 'object') ? v.lookAuto : {};
+    delete v.artGender;
     v.artCache = Object.assign({ bg: {}, char: {}, item: {}, cg: {} }, v.artCache);
     v.gallery = Array.isArray(v.gallery) ? v.gallery : [];
     // 老版本默认值迁移：旧画风尾巴 / 旧半身立绘模板
@@ -342,36 +344,58 @@ function bindPanel(wrap, hooks) {
     bindMapEditor(wrap, 'scenes', '场景类目', '背景图片 URL（留空用内置 SVG）');
 
     // --- 角色性别 ---
-    bindGenderList(wrap, hooks);
+    bindPromptList(wrap, hooks);
 }
 
-// 角色性别表：名字 + 下拉。用来纠正「男角色被画成女生」。
-function bindGenderList(wrap, hooks) {
-    const host = wrap.querySelector('#vnl-gender-list');
+// 角色外观提示词：名字 + 英文提示词输入框。
+// 这些提示词就是生成立绘时用的那一串，性别、发色、服装都写在这里。
+function bindPromptList(wrap, hooks) {
+    const host = wrap.querySelector('#vnl-prompt-list');
     if (!host) return;
     let list = [];
     try { list = (hooks && hooks.knownChars) ? hooks.knownChars() : []; } catch (e) { list = []; }
+
+    const genBtn = wrap.querySelector('#vnl-looks-gen');
+    if (genBtn) {
+        genBtn.addEventListener('click', async () => {
+            if (!hooks || !hooks.generateLooks) return;
+            genBtn.disabled = true;
+            const old = genBtn.textContent;
+            genBtn.textContent = '正在让 AI 写…';
+            try {
+                const r = await hooks.generateLooks();
+                flash(wrap, `已写入 ${r.ok} / ${r.total} 个角色的外观提示词`);
+                bindPromptList(wrap, hooks);
+            } catch (e) {
+                flash(wrap, '生成失败：' + (e && e.message ? e.message : e));
+            } finally {
+                genBtn.disabled = false;
+                genBtn.textContent = old;
+            }
+        });
+    }
+
     if (!Array.isArray(list) || !list.length) {
-        host.innerHTML = '<div class="vnl-map-empty">（当前聊天里没读到角色卡，进入有角色的聊天后这里会列出全部角色）</div>';
+        host.innerHTML = '<div class="vnl-map-empty">（当前聊天里没读到角色，进入有角色的聊天后这里会列出全部角色）</div>';
         return;
     }
     host.innerHTML = '';
-    for (const c of list.slice(0, 30)) {
+    for (const c of list.slice(0, 40)) {
         const row = document.createElement('div');
-        row.className = 'vnl-gender-row';
-        const auto = c.gender === 'male' ? '男（卡片）' : c.gender === 'female' ? '女（卡片）' : '未知';
-        row.innerHTML = `<span class="vnl-gender-name">${escAttr(c.name)}</span>
-            <span class="vnl-gender-auto">${auto}</span>
-            <select class="vnl-gender-sel">
-                <option value="">自动</option>
-                <option value="male">男</option>
-                <option value="female">女</option>
-            </select>`;
-        const sel = row.querySelector('select');
-        sel.value = S.artGender[c.name] || '';
-        sel.addEventListener('change', () => {
-            if (sel.value) S.artGender[c.name] = sel.value; else delete S.artGender[c.name];
-            // 性别变了 → 该角色立绘重画
+        row.className = 'vnl-prompt-row';
+        const isAuto = S.lookAuto && S.lookAuto[c.name] === true;
+        row.innerHTML = `<div class="vnl-prompt-head">
+                <span class="vnl-prompt-name">${escAttr(c.name)}</span>
+                <span class="vnl-prompt-badge">${isAuto ? 'AI 生成' : (S.artPrompts[c.name] ? '手动' : '未设置')}</span>
+            </div>
+            <input class="vnl-prompt-input" type="text" value="${escAttr(S.artPrompts[c.name] || '')}"
+                placeholder="1boy, black hair, red eyes, white coat, tall">`;
+        const inp = row.querySelector('input');
+        inp.addEventListener('change', () => {
+            const v = inp.value.trim();
+            if (v) S.artPrompts[c.name] = v; else delete S.artPrompts[c.name];
+            // 用户改过 → 归用户所有，AI 之后不再覆盖
+            if (S.lookAuto) delete S.lookAuto[c.name];
             if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
             save();
         });
@@ -440,37 +464,6 @@ function bindMapEditor(wrap, key, namePh, urlPh) {
             });
             tbody.appendChild(tr);
 
-            // 角色额外一行：英文提示词 + 性别（AI 生成立绘时用）
-            if (key === 'chars') {
-                const tr2 = document.createElement('tr');
-                tr2.className = 'vnl-map-prompt-row';
-                const cur = S.artGender[k] || '';
-                tr2.innerHTML = `<td colspan="2"><input data-p="1" value="${escAttr(S.artPrompts[k] || '')}"
-                    placeholder="英文提示词（可选）：silver hair, white dress, gentle smile"></td>
-                    <td><select data-g="1" class="vnl-gender-sel">
-                        <option value="">性别自动</option>
-                        <option value="male">男</option>
-                        <option value="female">女</option>
-                    </select></td>`;
-                const pi = tr2.querySelector('input');
-                pi.addEventListener('change', () => {
-                    const v = pi.value.trim();
-                    if (v) S.artPrompts[k] = v; else delete S.artPrompts[k];
-                    // 提示词变了 → 旧立绘作废，下次重新生成
-                    if (S.artCache && S.artCache.char) delete S.artCache.char[k];
-                    save();
-                });
-                const gs = tr2.querySelector('select');
-                if (gs) {
-                    gs.value = cur;
-                    gs.addEventListener('change', () => {
-                        if (gs.value) S.artGender[k] = gs.value; else delete S.artGender[k];
-                        if (S.artCache && S.artCache.char) delete S.artCache.char[k];
-                        save();
-                    });
-                }
-                tbody.appendChild(tr2);
-            }
         }
     };
     addBtn.addEventListener('click', () => {
@@ -562,9 +555,10 @@ function settingsHTML() {
         </div>
 
         <div class="vnl-set-section">
-            <div class="vnl-set-title">角色性别（纠正男女画错）</div>
-            <small>AI 画立绘时会按这里的性别加 <b>1boy / 1girl</b> 标签，并把异性标签写进负向提示词。角色卡里填了性别的会自动读出来，没填就靠正文里的「他/她」猜。</small>
-            <div id="vnl-gender-list" class="vnl-gender-list"></div>
+            <div class="vnl-set-title">角色外观提示词（决定立绘长什么样）</div>
+            <small>这里每个角色对应一串英文标签，生成立绘时原样拼进提示词。想让立绘贴合角色，就靠这一串：性别、发色发型、瞳色、体型、服装。点下面的按钮可以让 AI 读角色卡自动写一份。</small>
+            <button class="vnl-map-add" id="vnl-looks-gen">让 AI 按角色卡写外观提示词</button>
+            <div id="vnl-prompt-list" class="vnl-prompt-list"></div>
         </div>
 
         <div class="vnl-set-section">
@@ -614,7 +608,7 @@ function settingsHTML() {
                     <option value="magenta">洋红</option>
                 </select>
             </div>
-            <small>透明底原理：让 AI 先画在纯色背景上，再用 ComfyUI 节点把该颜色抠成透明（PNG 带 alpha）。角色衣服接近绿幕时换成蓝幕/洋红。</small>
+            <small>透明底有两条路：① ComfyUI 0.37 以上装了 BiRefNet 背景移除模型 → 服务端直接出带 alpha 的 PNG（最干净）；② 没有就用浏览器抠色，效果差一些。角色衣服接近绿幕时换成蓝幕/洋红。</small>
             <div class="vnl-set-row">
                 <label>画风补充</label>
                 <input type="text" id="vnl-artstyle" placeholder="叠加在预设之后的额外标签，可留空" style="flex:1">

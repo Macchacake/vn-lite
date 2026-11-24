@@ -41,6 +41,15 @@ export function addToGallery(item) {
 
 export function list() { return (S && Array.isArray(S.gallery)) ? S.gallery : []; }
 
+// 图片 404 / ComfyUI 换了地址 → 从图集里剔掉，别留一格空白
+export function removeFromGallery(item) {
+    if (!S || !Array.isArray(S.gallery) || !item) return;
+    const id = item.base + '|' + item.filename;
+    const before = S.gallery.length;
+    S.gallery = S.gallery.filter(g => (g.base + '|' + g.filename) !== id);
+    if (S.gallery.length !== before) saveSettings();
+}
+
 export function clearGallery() {
     if (!S) return;
     S.gallery = [];
@@ -87,6 +96,10 @@ export function renderPage(host) {
         img.decoding = 'async';
         img.src = urlOf(it);
         img.alt = it.key || it.kind;
+        img.addEventListener('error', () => {
+            cell.remove();
+            removeFromGallery(it);
+        });
         // 立绘按透明底显示（棋盘格衬底），跟舞台一致
         if (it.kind === 'char' && S && S.portraitAlpha) {
             cell.classList.add('vnl-gal-alpha');
