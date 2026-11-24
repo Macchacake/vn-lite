@@ -8,14 +8,22 @@
 import { generateCG } from './sd.js';
 import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
+import { styleOf, SIZE, GENDER, joinTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
+import { clearChromaCache } from './chroma.js';
 
 let S = null;                       // 当前设置对象（引用，实时生效）
 const queue = [];                   // 待生成队列
 const queued = new Set();           // kind|key 去重
 let running = false;
 const listeners = new Set();
+let genders = {};                   // 角色名 → 'male' | 'female'（由 index.js 从角色卡读取）
 
 export function init(settings) { S = settings; }
+
+// 角色卡里的性别信息（含手动覆盖）
+export function setGenders(map) {
+    genders = map && typeof map === 'object' ? map : {};
+}
 
 export function onReady(fn) {
     listeners.add(fn);
@@ -92,24 +100,56 @@ const SCENE_PROMPT = {
 
 export function scenePrompt(cat) {
     const base = SCENE_PROMPT[cat] || 'anime background art, detailed scenery';
-    return base + ', no people, anime background, highly detailed, ' + styleTail();
+    return joinTags([base, 'no people, anime background, highly detailed', styleOf(S).tail]);
 }
 
+// 决定一个角色的性别：手动覆盖 > 角色卡 > 提示词里自己写的 > 猜不出
+export function genderOf(name, hint) {
+    const h = String(hint == null ? ((S && S.artPrompts && S.artPrompts[name]) || '') : hint);
+    if (/\b1girl\b|\bfemale\b/i.test(h)) return 'female';
+    if (/\b1boy\b|\bmale\b/i.test(h)) return 'male';
+    const manual = S && S.artGender && S.artGender[name];
+    if (manual === 'male' || manual === 'female') return manual;
+    const fromCard = genders[name];
+    if (fromCard === 'male' || fromCard === 'female') return fromCard;
+    return null;
+}
+
+const KEY_WORD = { green: 'green', blue: 'blue', magenta: 'magenta' };
+
+function alphaOn() { return !!(S && S.portraitAlpha); }
+
 export function charPrompt(name) {
-    const tpl = (S && S.portraitTpl) || 'anime character portrait, upper body, looking at viewer, detailed face, soft lighting';
+    let tpl = (S && S.portraitTpl) || DEFAULT_PORTRAIT_TPL;
     const hint = (S && S.artPrompts && S.artPrompts[name]) || '';
-    return [tpl, hint, styleTail()].filter(Boolean).join(', ');
+    const st = styleOf(S);
+    const g = genderOf(name, hint);
+    const gTag = g ? GENDER[g].pos : '';
+    const boost = g === 'male' ? st.preset.maleBoost : '';
+    // 要抠色时不能留「simple background」，否则模型可能画成白底/抽象底，抠不干净
+    if (alphaOn()) tpl = tpl.replace(/simple background,?\s*/gi, '');
+    const key = alphaOn() ? 'solid ' + (KEY_WORD[S.portraitKey] || 'green') + ' background, plain background, chroma key' : '';
+    return joinTags([gTag, tpl, hint, boost, key, st.tail]);
+}
+
+export function charNeg(name) {
+    const hint = (S && S.artPrompts && S.artPrompts[name]) || '';
+    const st = styleOf(S);
+    const g = genderOf(name, hint);
+    const parts = [st.preset.neg];
+    if (g) parts.push(GENDER[g].neg);
+    if (alphaOn()) parts.push('detailed background, scenery, gradient background, multiple views, multiple characters');
+    return parts.filter(Boolean).join(', ');
 }
 
 export function itemPrompt(name) {
-    const tpl = (S && S.itemTpl) || 'game item icon, single object, centered, simple dark background, soft rim light';
+    const tpl = (S && S.itemTpl) || DEFAULT_ITEM_TPL;
     const hint = (S && S.artPrompts && S.artPrompts[name]) || '';
-    return [tpl, hint, styleTail()].filter(Boolean).join(', ');
+    return joinTags([tpl, hint, styleOf(S).tail]);
 }
 
-function styleTail() {
-    return (S && S.artStyle) || 'anime style, detailed, cinematic lighting';
-}
+// 立绘是否要求透明底（供 stage 决定是否加描边/投影）
+export function portraitAlpha() { return alphaOn(); }
 
 // ---------- 队列 ----------
 export function ensure(kind, key, prompt, opts = {}) {
@@ -119,7 +159,17 @@ export function ensure(kind, key, prompt, opts = {}) {
     const id = kind + '|' + key;
     if (queued.has(id)) return false;
     queued.add(id);
-    queue.push({ kind, key, prompt, priority: opts.priority ? 1 : 0 });
+    const size = opts.size || SIZE[kind] || SIZE.cg;
+    queue.push({
+        kind, key, prompt,
+        priority: opts.priority ? 1 : 0,
+        opts: {
+            w: size[0], h: size[1],
+            negative: opts.negative || '',
+            transparent: !!opts.transparent,
+            keyColor: opts.keyColor || 'green',
+        },
+    });
     pump();
     return true;
 }
@@ -137,7 +187,7 @@ async function pump() {
     running = true;
     const job = takeNext();
     try {
-        const res = await generateCG(job.prompt, S);
+        const res = await generateCG(job.prompt, S, job.opts || {});
         if (res && res.base && res.filename) {
             store(job.kind, job.key, res, job.prompt);
         } else {
@@ -160,19 +210,38 @@ export function prefetch(script) {
     let added = 0;
     const seen = new Set();
 
-    const want = (kind, key, prompt) => {
+    const wantChar = (name) => {
         if (added >= max) return;
-        if (seen.has(kind + key)) return;
-        seen.add(kind + key);
-        if (peek(kind, key)) return;
-        if (ensure(kind, key, prompt)) added++;
+        if (seen.has('char' + name)) return;
+        seen.add('char' + name);
+        if (peek('char', name)) return;
+        if (ensure('char', name, charPrompt(name), {
+            negative: charNeg(name),
+            size: SIZE.char,
+            transparent: alphaOn(),
+            keyColor: S.portraitKey,
+        })) added++;
+    };
+    const wantBg = (cat) => {
+        if (added >= max) return;
+        if (seen.has('bg' + cat)) return;
+        seen.add('bg' + cat);
+        if (peek('bg', cat)) return;
+        if (ensure('bg', cat, scenePrompt(cat), { size: SIZE.bg })) added++;
+    };
+    const wantItem = (name) => {
+        if (added >= max) return;
+        if (seen.has('item' + name)) return;
+        seen.add('item' + name);
+        if (peek('item', name)) return;
+        if (ensure('item', name, itemPrompt(name), { size: SIZE.item })) added++;
     };
 
     for (const seg of script.segments || []) {
-        if (seg.t === 'dir' && seg.scene) want('bg', seg.scene, scenePrompt(seg.scene));
-        if (seg.t === 'dir' && seg.char && seg.char.name) want('char', seg.char.name, charPrompt(seg.char.name));
-        if (seg.t === 'say' && seg.who) want('char', seg.who, charPrompt(seg.who));
-        if (seg.t === 'item' && seg.name) want('item', seg.name, itemPrompt(seg.name));
+        if (seg.t === 'dir' && seg.scene) wantBg(seg.scene);
+        if (seg.t === 'dir' && seg.char && seg.char.name) wantChar(seg.char.name);
+        if (seg.t === 'say' && seg.who) wantChar(seg.who);
+        if (seg.t === 'item' && seg.name) wantItem(seg.name);
         if (added >= max) break;
     }
     // 背景优先级最高：先把场景铺好
@@ -187,7 +256,7 @@ export async function cg(prompt) {
     const hit = peek('cg', prompt);
     if (hit) return { url: hit };
     if (!S || !S.sdOn) return null;
-    const res = await generateCG(prompt, S);
+    const res = await generateCG(prompt, S, { w: SIZE.cg[0], h: SIZE.cg[1], negative: styleOf(S).preset.neg });
     if (!res) return null;
     if (res.base && res.filename) store('cg', prompt, res, prompt);
     return { url: res.url };
@@ -210,5 +279,6 @@ export function clearCache(kind) {
     if (!S.artCache) S.artCache = {};
     if (kind) S.artCache[kind] = {};
     else S.artCache = { bg: {}, char: {}, item: {}, cg: {} };
+    try { clearChromaCache(); } catch (e) { /* 抠色缓存清不掉也不影响 */ }
     saveSettings();
 }

@@ -5,6 +5,7 @@
 // ============================================
 
 import { save as saveSettings } from './settings.js';
+import { applyChroma } from './chroma.js';
 
 let S = null;
 
@@ -86,6 +87,11 @@ export function renderPage(host) {
         img.decoding = 'async';
         img.src = urlOf(it);
         img.alt = it.key || it.kind;
+        // 立绘按透明底显示（棋盘格衬底），跟舞台一致
+        if (it.kind === 'char' && S && S.portraitAlpha) {
+            cell.classList.add('vnl-gal-alpha');
+            applyChroma(img, urlOf(it));
+        }
         const tag = document.createElement('span');
         tag.className = 'vnl-gal-tag';
         tag.textContent = (KIND_LABEL[it.kind] || '图') + (it.key ? ' · ' + it.key : '');
@@ -105,7 +111,12 @@ function openLightbox(host, it) {
             <div class="vnl-gal-meta"></div>
             <button class="vnl-menu-btn vnl-gal-close">关闭</button>
         </div>`;
-    box.querySelector('img').src = urlOf(it);
+    const bigImg = box.querySelector('img');
+    bigImg.src = urlOf(it);
+    if (it.kind === 'char' && S && S.portraitAlpha) {
+        box.querySelector('.vnl-gal-light-inner').classList.add('vnl-gal-alpha');
+        applyChroma(bigImg, urlOf(it));
+    }
     const meta = box.querySelector('.vnl-gal-meta');
     meta.textContent = (it.key || '') + (it.prompt ? '\n' + it.prompt : '');
     box.addEventListener('click', e => {

@@ -22,6 +22,7 @@ import * as settings from './src/settings.js';
 import * as art from './src/art.js';
 import * as gallery from './src/gallery.js';
 import { parseMessage, resetLearned } from './src/parser.js';
+import { guessGender } from './src/styles.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
 import { buildProtocol } from './src/protocol.js';
 import { bgm } from './src/bgm.js';
@@ -40,20 +41,56 @@ function applyProtocolInjection() {
 }
 
 // ---------- 上下文信息 ----------
-function getCtxInfo() {
-    const members = [];
+function currentCharacters() {
+    const out = [];
     try {
         if (selected_group) {
             const g = groups.find(x => x.id == selected_group);
             if (g && Array.isArray(g.members)) {
                 for (const mid of g.members) {
                     const c = characters[mid];
-                    if (c && c.name) members.push(c.name);
+                    if (c && c.name) out.push(c);
                 }
             }
+            return out;
         }
     } catch { /* 群组信息不可用时忽略 */ }
-    return { charName: name2, userName: name1, members, chunk: settings.get().chunk || 60 };
+    try {
+        if (Array.isArray(characters)) for (const c of characters) if (c && c.name) out.push(c);
+    } catch { /* 角色列表不可用时忽略 */ }
+    return out;
+}
+
+// 角色性别：卡片 gender 字段 → 正文里「他/她」的出现次数
+function genderOfCard(c) {
+    if (!c) return null;
+    const direct = guessGender(c.gender);
+    if (direct) return direct;
+    return guessGender([c.description, c.personality, c.scenario, c.mes_example].filter(Boolean).join(' '));
+}
+
+function buildGenderMap() {
+    const map = {};
+    for (const c of currentCharacters()) {
+        const g = genderOfCard(c);
+        if (g) map[c.name] = g;
+    }
+    return map;
+}
+
+// 设置面板用：列出可指定性别的角色
+function knownChars() {
+    return currentCharacters().slice(0, 60).map(c => ({ name: c.name, gender: genderOfCard(c) }));
+}
+
+function getCtxInfo(extra) {
+    const members = currentCharacters().slice(0, 60).map(c => c.name);
+    return Object.assign({
+        charName: name2,
+        userName: name1,
+        members,
+        chunk: settings.get().chunk || 60,
+    }, extra || {});
 }
 
 // ---------- 素材解析：映射表 → 角色头像 → null（剪影） ----------
@@ -90,6 +127,7 @@ function envFactory() {
         ctxInfo: getCtxInfo(),
         userName: name1,
         resolveChar,
+        knownChars,
         sendUserMessage,
         // CG 绘画：先查缓存，再按需生成（URL/开关实时生效）
         sd: (prompt) => art.cg(prompt),
@@ -114,7 +152,8 @@ function appendLatestToTheater() {
     const sig = lastId + ':' + (last.swipe_id ?? '') + ':' + last.mes.length;
     if (sig === _appendedSig) return; // 同一条消息（流式/重复事件）不重复追加
     _appendedSig = sig;
-    const script = parseMessage(last.mes, getCtxInfo());
+    const S = settings.get();
+    const script = parseMessage(last.mes, getCtxInfo({ autoChoice: !!S.autoChoice }));
     if (script && script.usable) {
         appendTheater(script, name2 || '演出');
         try { art.prefetch(script); } catch (e) { /* 预生成失败不影响演出 */ }
@@ -130,8 +169,11 @@ function buildTheaterItems() {
     }
     const recent = ids.slice(-Math.max(1, settings.get().historyCount || 6));
     const items = [];
-    for (const id of recent) {
-        const script = parseMessage(chat[id].mes, getCtxInfo());
+    const S = settings.get();
+    for (let k = 0; k < recent.length; k++) {
+        // 只有最后一幕补兜底行动项，历史幕保持原样
+        const last = k === recent.length - 1;
+        const script = parseMessage(chat[recent[k]].mes, getCtxInfo({ autoChoice: last && !!S.autoChoice }));
         if (script && script.usable) items.push({ script, title: name2 || '演出' });
     }
     return items;
@@ -139,6 +181,7 @@ function buildTheaterItems() {
 
 function enterVnMode() {
     if (isOpen()) return;
+    art.setGenders(buildGenderMap());   // 进文游前刷新角色性别表
     openTheater(buildTheaterItems(), envFactory, { startAtEnd: true });
 }
 
@@ -209,6 +252,7 @@ async function init() {
 
     // 美术总监 / 图集：共享同一份设置对象
     art.init(settings.get());
+    art.setGenders(buildGenderMap());
     gallery.init(settings.get());
 
     // BGM 初始状态 + 解锁
@@ -244,6 +288,7 @@ async function init() {
         closeTheater();
         _appendedSig = '';
         resetLearned();   // 换聊天了，学到的角色名清空，避免串味
+        art.setGenders(buildGenderMap());
     });
 
     console.log('[VN-Lite] 文游Lite 已加载：' + settings.get().mode + ' 模式');

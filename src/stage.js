@@ -9,7 +9,9 @@
 import { sceneBG, weatherOf, silhouetteURI } from './assets.js';
 import { parseMessage } from './parser.js';
 import { bgm } from './bgm.js';
-import { peek as peekArt, onReady as onArtReady } from './art.js';
+import { peek as peekArt, onReady as onArtReady, portraitAlpha, ensure as ensureArt, charPrompt, charNeg } from './art.js';
+import { SIZE } from './styles.js';
+import { applyChroma } from './chroma.js';
 import { renderChoices, renderQTE, renderDice, renderInput } from './minigame.js';
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -112,10 +114,16 @@ function createStage(script, env) {
     // 立绘图片：手动映射 > AI 生成 > 剪影
     function spriteSrc(name, expr) {
         const mapped = env.resolveChar ? env.resolveChar(name) : null;
-        if (mapped) return { src: mapped, gen: false };
+        if (mapped) return { src: mapped, gen: false, alpha: false };
         const gen = peekArt('char', name);
-        if (gen) return { src: gen, gen: true };
-        return { src: silhouetteURI(name, expr), gen: false };
+        if (gen) return { src: gen, gen: true, alpha: portraitAlpha() };
+        return { src: silhouetteURI(name, expr), gen: false, alpha: false };
+    }
+
+    // AI 立绘要透明底 → 浏览器端抠色，异步替换，不阻塞演出
+    function maybeChroma(img, url, alpha) {
+        if (!alpha || !url) return;
+        applyChroma(img, url);
     }
 
     // 生图完成 → 实时替换到舞台上
@@ -125,7 +133,12 @@ function createStage(script, env) {
             bgFront.style.backgroundImage = `url("${url}")`;
         } else if (kind === 'char' && state.onStage.has(key)) {
             const img = state.onStage.get(key).node.querySelector('img');
-            if (img) { img.src = url; img.dataset.gen = '1'; }
+            if (img) {
+                img.src = url;
+                img.dataset.gen = '1';
+                img.dataset.alpha = portraitAlpha() ? '1' : '0';
+                maybeChroma(img, url, portraitAlpha());
+            }
         }
     });
 
@@ -139,7 +152,9 @@ function createStage(script, env) {
             if (img && img.dataset.src !== r.src) {
                 img.dataset.src = r.src;
                 img.dataset.gen = r.gen ? '1' : '0';
+                img.dataset.alpha = r.alpha ? '1' : '0';
                 img.src = r.src;
+                maybeChroma(img, r.src, r.alpha);
             }
             return;
         }
@@ -156,7 +171,18 @@ function createStage(script, env) {
         const r = spriteSrc(name, expr);
         img.dataset.src = r.src;
         img.dataset.gen = r.gen ? '1' : '0';
+        img.dataset.alpha = r.alpha ? '1' : '0';
         img.src = r.src;
+        maybeChroma(img, r.src, r.alpha);
+        // 既没有手动映射也没有 AI 图 → 现场排一张（预生成没覆盖到的角色兜底）
+        if (!r.gen && !(env.resolveChar && env.resolveChar(name)) && S.sdOn && S.autoArt) {
+            ensureArt('char', name, charPrompt(name), {
+                negative: charNeg(name),
+                size: SIZE.char,
+                transparent: portraitAlpha(),
+                keyColor: S.portraitKey,
+            });
+        }
         const label = document.createElement('div');
         label.className = 'vnl-sname'; label.textContent = name;
         node.append(img, label);
@@ -235,6 +261,7 @@ function createStage(script, env) {
             renderChoices(textEl, seg.opts, {
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
+                note: seg.synthetic ? 'AI 这次没给选项，下面是通用行动，也可以直接在下方输入框自己写。' : '',
                 onPick: () => advance(),
             });
             state.interactive = true;

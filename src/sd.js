@@ -96,7 +96,7 @@ async function detectComfyUI(S, onProgress) {
             _lastGood.ts = Date.now();
             _modelCache.list = null;   // 让 listModels 重新拉一次
             _modelCache.base = null;
-            return { base: res.base, model: res.model };
+            return { base: res.base, model: res.model, models: res.models };
         }
     }
     return null;
@@ -140,33 +140,41 @@ function pickModel(models) {
 }
 
 // ---------- 最小工作流（API 格式） ----------
-// SDXL 用 832x1216，SD1.5 用 512x768
-function buildWorkflow(model, prompt, isXL) {
-    const w = Math.random() * 4294967295 >>> 0; // 随机种子
-    // Animagine XL 4.0 官方规范：分数标签正向 + 官方完整负向，CFG 5 / 28 步
-    const pos = 'masterpiece, high score, great score, absurdres, ' + prompt;
-    const neg = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry';
-    const [W, H] = isXL ? [832, 1216] : [512, 768];
-    return {
-        '3': { class_type: 'KSampler', inputs: { seed: w, steps: isXL ? 28 : 22, cfg: isXL ? 5 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+// 尺寸由调用方按用途传入（立绘竖长条 / 背景横图 / 图标方图）
+const NEG_BASE = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry';
+
+function buildWorkflow(model, prompt, opts = {}) {
+    const isXL = /xl/i.test(model);
+    const seed = Math.random() * 4294967295 >>> 0;
+    // Animagine XL 4.0 官方规范：质量标签放最后 + 官方完整负向，CFG 5 / 28 步
+    const pos = prompt + ', masterpiece, high score, great score, absurdres';
+    const neg = [opts.negative, NEG_BASE].filter(Boolean).join(', ');
+    const fallback = isXL ? [832, 1216] : [512, 768];
+    const W = Number(opts.w) || fallback[0];
+    const H = Number(opts.h) || fallback[1];
+    const wf = {
+        '3': { class_type: 'KSampler', inputs: { seed, steps: isXL ? 28 : 22, cfg: isXL ? 5 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
         '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: model } },
         '5': { class_type: 'EmptyLatentImage', inputs: { width: W, height: H, batch_size: 1 } },
         '6': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['4', 1] } },
         '7': { class_type: 'CLIPTextEncode', inputs: { text: neg, clip: ['4', 1] } },
         '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
-        '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'vnl_cg', images: ['8', 0] } },
     };
+    // 透明底不在这里做：ComfyUI 的 ImageColorToMask 是精确颜色匹配，
+    // 而模型画的绿幕一定带渐变，匹配不到；改成前端 chroma.js 抠色（魔棒漫水）。
+    wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: opts.transparent ? 'vnl_char' : 'vnl_cg', images: ['8', 0] } };
+    return wf;
 }
 
 // ---------- 单个地址上的完整生成流程 ----------
-async function tryGenerateOn(base, prompt, S) {
-    const key = base + '::' + prompt;
+async function tryGenerateOn(base, prompt, S, opts = {}) {
+    const key = base + '::' + prompt + '::' + (opts.w || 0) + 'x' + (opts.h || 0) + (opts.transparent ? '|a' + (opts.keyColor || 'green') : '');
     if (_imgCache.has(key)) return { url: _imgCache.get(key) };
     try {
         const models = await listModels(base);
         const model = S.sdModel && models.includes(S.sdModel) ? S.sdModel : pickModel(models);
         const isXL = /xl/i.test(model);
-        const wf = buildWorkflow(model, prompt, isXL);
+        const wf = buildWorkflow(model, prompt, opts);
 
         const pr = await fetch(base + '/prompt', {
             method: 'POST',
@@ -212,8 +220,8 @@ async function tryGenerateOn(base, prompt, S) {
 }
 
 // ---------- 主入口 ----------
-// 返回 { url } 或 null（任何失败均静默降级）
-async function generateCG(prompt, S) {
+// 返回 { url, filename, ... } 或 null（任何失败均静默降级）
+async function generateCG(prompt, S, opts = {}) {
     if (!/^[a-zA-Z0-9]/.test(prompt)) {
         // 中文提示词：SD 不认识，直接降级，避免浪费一次生成
         return null;
@@ -221,7 +229,7 @@ async function generateCG(prompt, S) {
 
     const bases = candidateBases(S).slice(0, 4); // 避免离线时探测太久
     for (const base of bases) {
-        const result = await tryGenerateOn(base, prompt, S);
+        const result = await tryGenerateOn(base, prompt, S, opts);
         if (result) return result;
     }
     console.warn('[VN-Lite] CG 生成失败：所有候选 ComfyUI 地址均不可用（可用「自动探测」重新选地址）');

@@ -8,6 +8,12 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;
 function renderChoices(container, opts, cfg) {
     const wrap = document.createElement('div');
     wrap.className = 'vnl-choices';
+    if (cfg && cfg.note) {
+        const note = document.createElement('div');
+        note.className = 'vnl-choice-note';
+        note.textContent = cfg.note;
+        wrap.appendChild(note);
+    }
     let picked = false;
     for (const opt of opts) {
         const btn = document.createElement('button');

@@ -391,8 +391,33 @@ function splitTrailingOptions(lines) {
     return { options, rest };
 }
 
+// ---------- 兜底行动项 ----------
+// AI 没写 [choice:] / 选项列表时，这一幕就没有任何可点的东西 → 玩家卡住。
+// 这里补三个通用行动项，保证永远有得点。
+const INTERACTIVE = new Set(['choice', 'input', 'qte', 'dice']);
+
+function hasInteractive(script) {
+    return (script.segments || []).some(s => INTERACTIVE.has(s.t));
+}
+
+function synthOptions(script, ctxInfo = {}) {
+    let who = null;
+    for (let i = script.segments.length - 1; i >= 0; i--) {
+        const s = script.segments[i];
+        if (s.t === 'say' && s.who) { who = s.who; break; }
+    }
+    // 没有说话人 → 用这一幕最后出场的角色（chars 末尾是最新的）
+    if (!who && Array.isArray(script.chars) && script.chars.length) {
+        who = script.chars[script.chars.length - 1].name;
+    }
+    // 说话人是玩家自己 → 别再「回应自己」
+    if (who && ctxInfo.userName && who === ctxInfo.userName) who = null;
+    const opts = [who ? '回应' + who : '开口说话', '观察四周', '静观其变'];
+    return opts;
+}
+
 // ---------- 统一入口 ----------
-// ctxInfo: { charName, userName, members: [], chunk } 用于说话人吸附与断句长度
+// ctxInfo: { charName, userName, members: [], chunk, autoChoice } 用于说话人吸附与断句长度
 function parseMessage(raw, ctxInfo = {}) {
     if (!raw || typeof raw !== 'string') return null;
     const knownNames = [ctxInfo.charName, ctxInfo.userName, ...(ctxInfo.members || [])]
@@ -420,6 +445,12 @@ function parseMessage(raw, ctxInfo = {}) {
     }
     learnNames(script.chars.map(c => c.name));
 
+    // 兜底：这一幕没有任何可交互段落 → 自动补三个行动项
+    if (ctxInfo.autoChoice && !hasInteractive(script) && script.segments.length) {
+        script.segments.push({ t: 'choice', opts: synthOptions(script, ctxInfo), synthetic: true });
+        script.synthetic = true;
+    }
+
     // 降级保护：一段都没有 → 全文一条旁白
     if (!script.segments.length) {
         const fallback = cleanText(raw).trim();
@@ -432,4 +463,4 @@ function parseMessage(raw, ctxInfo = {}) {
 }
 
 const EXPR_NAMES = ['平静', '微笑', '难过', '生气', '惊讶', '害羞', '严肃', '得意'];
-export { parseMessage, EXPR_NAMES, learnNames, resetLearned, pickSpeaker, splitText };
+export { parseMessage, EXPR_NAMES, learnNames, resetLearned, pickSpeaker, splitText, hasInteractive };

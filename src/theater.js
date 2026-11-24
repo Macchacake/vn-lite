@@ -154,12 +154,12 @@ function openTheater(items, envFactory, opts = {}) {
     const galleryBody = galleryPage.querySelector('.vnl-gallery-body');
 
     function showSettings() {
-        if (!settingsMounted) {
-            mountPanel(settingsBody, {
-                openGallery: () => { hideSettings(); showGallery(); },
-            });
-            settingsMounted = true;
-        }
+        // 每次打开都重建：模型列表 / 素材统计 / 角色性别都要是最新的
+        mountPanel(settingsBody, {
+            openGallery: () => { hideSettings(); showGallery(); },
+            knownChars: env.knownChars,
+        });
+        settingsMounted = true;
         settingsPage.classList.add('vnl-settings-on');
     }
     function hideSettings() {

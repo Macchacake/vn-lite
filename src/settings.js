@@ -5,6 +5,7 @@
 // ============================================
 
 import { DEFAULT_PROTOCOL } from './protocol.js';
+import { STYLE_PRESETS, DEFAULT_STYLE, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
 
 const DEFAULTS = {
     enabled: true,
@@ -15,6 +16,7 @@ const DEFAULTS = {
     bgmOn: false,
     bgmVol: 0.3,
     sendChoice: true,   // 选择题点选后发送到聊天
+    autoChoice: true,   // AI 没给选项时，自动补三个行动项
     historyCount: 6,    // 进入文游时载入最近 N 条 AI 消息
     weather: true,      // CSS 天气氛围
     maps: { chars: {}, scenes: {} },  // 角色/场景素材映射（手动指定图片 URL）
@@ -27,13 +29,18 @@ const DEFAULTS = {
     sdUrl: '',          // 例：http://192.168.1.100:8188
     sdHistory: [],      // 自动记录曾经填过的地址，供自动探测/回退使用
     sdModel: '',        // 留空自动选择
+    sdModelList: [],    // 上次探测到的模型列表（供下拉框）
     autoArt: true,      // 自动生图（背景/立绘/物品）
     preGen: true,       // 提前预生成下一幕要用的素材
     preGenMax: 3,       // 每次预生成最多几张
-    artStyle: 'anime style, detailed, cinematic lighting',
-    portraitTpl: 'anime character portrait, upper body, looking at viewer, detailed face, soft lighting',
-    itemTpl: 'game item icon, single object, centered, simple dark background, soft rim light',
+    stylePreset: DEFAULT_STYLE,
+    artStyle: '',       // 画风补充（叠加在预设之后）
+    portraitTpl: DEFAULT_PORTRAIT_TPL,
+    itemTpl: DEFAULT_ITEM_TPL,
+    portraitAlpha: true,   // 立绘透明底（抠色）
+    portraitKey: 'green',  // 抠色用的背景色
     artPrompts: {},     // 角色/物品 → 额外英文提示词
+    artGender: {},      // 角色 → 手动指定性别 male/female
     artCache: { bg: {}, char: {}, item: {}, cg: {} },
     gallery: [],        // 图集（只存 ComfyUI 文件名）
 };
@@ -49,9 +56,15 @@ function init(extSettings, saveFn, hooks = {}) {
     const v = extSettings.vnLite;
     v.maps = Object.assign({ chars: {}, scenes: {} }, v.maps);
     v.sdHistory = Array.isArray(v.sdHistory) ? v.sdHistory : [];
+    v.sdModelList = Array.isArray(v.sdModelList) ? v.sdModelList : [];
     v.artPrompts = (v.artPrompts && typeof v.artPrompts === 'object') ? v.artPrompts : {};
+    v.artGender = (v.artGender && typeof v.artGender === 'object') ? v.artGender : {};
     v.artCache = Object.assign({ bg: {}, char: {}, item: {}, cg: {} }, v.artCache);
     v.gallery = Array.isArray(v.gallery) ? v.gallery : [];
+    // 老版本默认值迁移：旧画风尾巴 / 旧半身立绘模板
+    if (v.artStyle === 'anime style, detailed, cinematic lighting') v.artStyle = '';
+    if (/upper body/.test(v.portraitTpl || '')) v.portraitTpl = DEFAULT_PORTRAIT_TPL;
+    if (!STYLE_PRESETS[v.stylePreset]) v.stylePreset = DEFAULT_STYLE;
     S = v;
     applyFont();
     return S;
@@ -112,6 +125,7 @@ function bindPanel(wrap, hooks) {
     bindCheck(wrap, '#vnl-bgmon', S.bgmOn, v => { S.bgmOn = v; });
     bindCheck(wrap, '#vnl-weather', S.weather, v => { S.weather = v; });
     bindCheck(wrap, '#vnl-sendchoice', S.sendChoice, v => { S.sendChoice = v; });
+    bindCheck(wrap, '#vnl-autochoice', S.autoChoice, v => { S.autoChoice = v; });
     bindCheck(wrap, '#vnl-autoart', S.autoArt, v => { S.autoArt = v; });
     bindCheck(wrap, '#vnl-pregen', S.preGen, v => { S.preGen = v; });
 
@@ -154,6 +168,49 @@ function bindPanel(wrap, hooks) {
         sdOn.addEventListener('change', () => { S.sdOn = sdOn.checked; save(); fireChanged(); });
     }
 
+    // --- 画风预设 ---
+    const styleSel = wrap.querySelector('#vnl-stylepreset');
+    const styleDesc = wrap.querySelector('#vnl-style-desc');
+    if (styleSel) {
+        styleSel.innerHTML = Object.entries(STYLE_PRESETS)
+            .map(([id, p]) => `<option value="${id}">${p.label}</option>`).join('');
+        styleSel.value = S.stylePreset;
+        const paintDesc = () => {
+            const p = STYLE_PRESETS[S.stylePreset] || STYLE_PRESETS[DEFAULT_STYLE];
+            if (styleDesc) styleDesc.textContent = p.desc + '　｜　' + p.tail;
+        };
+        paintDesc();
+        styleSel.addEventListener('change', async () => {
+            S.stylePreset = styleSel.value;
+            save();
+            paintDesc();
+            // 换了画风，旧图不再匹配 → 清空素材缓存重新生成
+            const { clearCache } = await import('./art.js');
+            clearCache();
+            refreshStats();
+            flash(wrap, '已切换画风：' + (STYLE_PRESETS[S.stylePreset] || {}).label + '（素材缓存已清空，下次演出按新画风重画）');
+        });
+    }
+
+    // --- 模型下拉 ---
+    const modelSel = wrap.querySelector('#vnl-model');
+    const paintModels = () => {
+        if (!modelSel) return;
+        const list = Array.isArray(S.sdModelList) ? S.sdModelList : [];
+        if (!list.length) {
+            modelSel.innerHTML = '<option value="">（点「测试连接」后自动读取）</option>';
+            modelSel.value = '';
+            return;
+        }
+        modelSel.innerHTML = '<option value="">自动选择（推荐）</option>' +
+            list.map(m => `<option value="${escAttr(m)}">${escAttr(m)}</option>`).join('');
+        modelSel.value = list.includes(S.sdModel) ? S.sdModel : '';
+    };
+    paintModels();
+    if (modelSel) {
+        modelSel.addEventListener('change', () => { S.sdModel = modelSel.value; save(); });
+    }
+
     ['#vnl-artstyle', '#vnl-portraittpl', '#vnl-itemtpl'].forEach(sel => {
         const el = wrap.querySelector(sel);
         if (!el) return;
@@ -161,6 +218,29 @@ function bindPanel(wrap, hooks) {
         el.value = S[key] || '';
         el.addEventListener('change', () => { S[key] = el.value.trim(); save(); });
     });
+
+    // --- 透明底 / 抠色 ---
+    const alphaEl = wrap.querySelector('#vnl-portraitalpha');
+    if (alphaEl) {
+        alphaEl.checked = !!S.portraitAlpha;
+        alphaEl.addEventListener('change', () => {
+            S.portraitAlpha = alphaEl.checked;
+            save();
+            if (S.artCache) S.artCache.char = {};   // 立绘重画
+            refreshStats();
+            flash(wrap, alphaEl.checked ? '已开启透明底立绘（重新生成时生效）' : '已关闭透明底');
+        });
+    }
+    const keyEl = wrap.querySelector('#vnl-portraitkey');
+    if (keyEl) {
+        keyEl.value = S.portraitKey || 'green';
+        keyEl.addEventListener('change', () => {
+            S.portraitKey = keyEl.value;
+            save();
+            if (S.artCache) S.artCache.char = {};
+            refreshStats();
+        });
+    }
 
     const sdUrl = wrap.querySelector('#vnl-sdurl');
     if (sdUrl) {
@@ -194,7 +274,11 @@ function bindPanel(wrap, hooks) {
                     if (found) {
                         rememberUrl(found.base);
                         sdUrl.value = found.base;
+                        S.sdModelList = Array.isArray(found.models) ? found.models : [];
+                        save();
+                        paintModels();
                         lines.push('✓ 已自动选用：' + found.base + '（模型 ' + found.model + '）');
+                        lines.push('可用模型 ' + S.sdModelList.length + ' 个：' + S.sdModelList.join('、'));
                     } else {
                         lines.push('✗ 未找到可用地址。请确认 ComfyUI 已启动、防火墙放行，或手动填写可访问的地址。');
                     }
@@ -212,8 +296,14 @@ function bindPanel(wrap, hooks) {
                 try {
                     const { testConnection } = await import('./sd.js');
                     const r = await testConnection(S, 8000);
+                    if (r.ok) {
+                        S.sdModelList = Array.isArray(r.models) ? r.models : [];
+                        save();
+                        paintModels();
+                    }
                     out.textContent = r.ok
-                        ? '✓ 已连接：' + r.base + '\n模型：' + r.model
+                        ? '✓ 已连接：' + r.base + '\n模型：' + r.model +
+                          '\n共 ' + S.sdModelList.length + ' 个：' + S.sdModelList.join('、')
                         : '✗ ' + r.reason + (r.base ? '\n地址：' + r.base : '');
                 } catch (e) {
                     out.textContent = '✗ 测试失败：' + (e && e.message ? e.message : e);
@@ -250,6 +340,43 @@ function bindPanel(wrap, hooks) {
     // --- 素材映射编辑器 ---
     bindMapEditor(wrap, 'chars', '角色名', '立绘图片 URL（留空用剪影）');
     bindMapEditor(wrap, 'scenes', '场景类目', '背景图片 URL（留空用内置 SVG）');
+
+    // --- 角色性别 ---
+    bindGenderList(wrap, hooks);
+}
+
+// 角色性别表：名字 + 下拉。用来纠正「男角色被画成女生」。
+function bindGenderList(wrap, hooks) {
+    const host = wrap.querySelector('#vnl-gender-list');
+    if (!host) return;
+    let list = [];
+    try { list = (hooks && hooks.knownChars) ? hooks.knownChars() : []; } catch (e) { list = []; }
+    if (!Array.isArray(list) || !list.length) {
+        host.innerHTML = '<div class="vnl-map-empty">（当前聊天里没读到角色卡，进入有角色的聊天后这里会列出全部角色）</div>';
+        return;
+    }
+    host.innerHTML = '';
+    for (const c of list.slice(0, 30)) {
+        const row = document.createElement('div');
+        row.className = 'vnl-gender-row';
+        const auto = c.gender === 'male' ? '男（卡片）' : c.gender === 'female' ? '女（卡片）' : '未知';
+        row.innerHTML = `<span class="vnl-gender-name">${escAttr(c.name)}</span>
+            <span class="vnl-gender-auto">${auto}</span>
+            <select class="vnl-gender-sel">
+                <option value="">自动</option>
+                <option value="male">男</option>
+                <option value="female">女</option>
+            </select>`;
+        const sel = row.querySelector('select');
+        sel.value = S.artGender[c.name] || '';
+        sel.addEventListener('change', () => {
+            if (sel.value) S.artGender[c.name] = sel.value; else delete S.artGender[c.name];
+            // 性别变了 → 该角色立绘重画
+            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
+            save();
+        });
+        host.appendChild(row);
+    }
 }
 
 function flash(wrap, msg) {
@@ -313,12 +440,18 @@ function bindMapEditor(wrap, key, namePh, urlPh) {
             });
             tbody.appendChild(tr);
 
-            // 角色额外一行：英文提示词（AI 生成立绘时用）
+            // 角色额外一行：英文提示词 + 性别（AI 生成立绘时用）
             if (key === 'chars') {
                 const tr2 = document.createElement('tr');
                 tr2.className = 'vnl-map-prompt-row';
-                tr2.innerHTML = `<td colspan="3"><input data-p="1" value="${escAttr(S.artPrompts[k] || '')}"
-                    placeholder="英文提示词（可选）：1girl, silver hair, white dress, gentle smile"></td>`;
+                const cur = S.artGender[k] || '';
+                tr2.innerHTML = `<td colspan="2"><input data-p="1" value="${escAttr(S.artPrompts[k] || '')}"
+                    placeholder="英文提示词（可选）：silver hair, white dress, gentle smile"></td>
+                    <td><select data-g="1" class="vnl-gender-sel">
+                        <option value="">性别自动</option>
+                        <option value="male">男</option>
+                        <option value="female">女</option>
+                    </select></td>`;
                 const pi = tr2.querySelector('input');
                 pi.addEventListener('change', () => {
                     const v = pi.value.trim();
@@ -327,6 +460,15 @@ function bindMapEditor(wrap, key, namePh, urlPh) {
                     if (S.artCache && S.artCache.char) delete S.artCache.char[k];
                     save();
                 });
+                const gs = tr2.querySelector('select');
+                if (gs) {
+                    gs.value = cur;
+                    gs.addEventListener('change', () => {
+                        if (gs.value) S.artGender[k] = gs.value; else delete S.artGender[k];
+                        if (S.artCache && S.artCache.char) delete S.artCache.char[k];
+                        save();
+                    });
+                }
                 tbody.appendChild(tr2);
             }
         }
@@ -412,7 +554,17 @@ function settingsHTML() {
                 <label>选择题发送到聊天</label>
                 <input type="checkbox" id="vnl-sendchoice">
             </div>
-            <small>关闭后，选项只在文游界面内推进，不自动发送到酒馆聊天。</small>
+            <div class="vnl-set-row">
+                <label>自动补行动项</label>
+                <input type="checkbox" id="vnl-autochoice">
+            </div>
+            <small>开启后，即使 AI 没写 [choice:] 或选项列表，也会在每幕结尾自动补三个可点行动，保证永远有东西可点。关闭后选项只在文游界面内推进，不自动发送到酒馆聊天。</small>
+        </div>
+
+        <div class="vnl-set-section">
+            <div class="vnl-set-title">角色性别（纠正男女画错）</div>
+            <small>AI 画立绘时会按这里的性别加 <b>1boy / 1girl</b> 标签，并把异性标签写进负向提示词。角色卡里填了性别的会自动读出来，没填就靠正文里的「他/她」猜。</small>
+            <div id="vnl-gender-list" class="vnl-gender-list"></div>
         </div>
 
         <div class="vnl-set-section">
@@ -444,12 +596,32 @@ function settingsHTML() {
                 <input type="range" id="vnl-pregemax" min="0" max="10" step="1">
             </div>
             <div class="vnl-set-row">
-                <label>画风尾巴</label>
-                <input type="text" id="vnl-artstyle" placeholder="anime style, detailed, cinematic lighting" style="flex:1">
+                <label>画风</label>
+                <select id="vnl-stylepreset" class="vnl-sel" style="flex:1"></select>
+            </div>
+            <small id="vnl-style-desc" class="vnl-style-desc"></small>
+            <div class="vnl-set-row">
+                <label>模型</label>
+                <select id="vnl-model" class="vnl-sel" style="flex:1"></select>
+            </div>
+            <div class="vnl-set-row">
+                <label>立绘透明底</label>
+                <input type="checkbox" id="vnl-portraitalpha">
+                <label style="flex:0 0 auto">抠色</label>
+                <select id="vnl-portraitkey" class="vnl-sel" style="flex:0 0 90px">
+                    <option value="green">绿幕</option>
+                    <option value="blue">蓝幕</option>
+                    <option value="magenta">洋红</option>
+                </select>
+            </div>
+            <small>透明底原理：让 AI 先画在纯色背景上，再用 ComfyUI 节点把该颜色抠成透明（PNG 带 alpha）。角色衣服接近绿幕时换成蓝幕/洋红。</small>
+            <div class="vnl-set-row">
+                <label>画风补充</label>
+                <input type="text" id="vnl-artstyle" placeholder="叠加在预设之后的额外标签，可留空" style="flex:1">
             </div>
             <div class="vnl-set-row">
                 <label>立绘提示词</label>
-                <input type="text" id="vnl-portraittpl" placeholder="anime character portrait, upper body…" style="flex:1">
+                <input type="text" id="vnl-portraittpl" placeholder="solo, full body, standing…" style="flex:1">
             </div>
             <div class="vnl-set-row">
                 <label>物品提示词</label>
