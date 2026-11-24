@@ -787,6 +787,8 @@
 .vnl-settings-body .vnl-set-row label { color: #dbe4f5; }
 .vnl-settings-body .vnl-set small { color: #8d99ad; line-height: 1.5; }
 .vnl-settings-body input[type="text"] {
+    min-width: 0;
+    max-width: 100%;
     background: rgba(20, 26, 42, 0.95);
     border: 1px solid rgba(120, 160, 230, 0.4);
     border-radius: 8px;
@@ -1019,6 +1021,8 @@
     color: #e6edfb;
     font-size: 13px;
     box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
 }
 .vnl-style-desc {
     color: #8d99ad !important;

@@ -8,7 +8,7 @@
 import { generateCG } from './sd.js';
 import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
-import { styleOf, SIZE, GENDER, joinTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
+import { styleOf, SIZE, GENDER, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
 import { clearChromaCache } from './chroma.js';
 
 let S = null;                       // 当前设置对象（引用，实时生效）
@@ -126,10 +126,16 @@ export function charPrompt(name) {
     const g = genderOf(name, hint);
     const gTag = g ? GENDER[g].pos : '';
     const boost = g === 'male' ? st.preset.maleBoost : '';
-    // 要抠色时不能留「simple background」，否则模型可能画成白底/抽象底，抠不干净
-    if (alphaOn()) tpl = tpl.replace(/simple background,?\s*/gi, '');
-    const key = alphaOn() ? 'solid ' + (KEY_WORD[S.portraitKey] || 'green') + ' background, plain background, chroma key' : '';
-    return joinTags([gTag, tpl, hint, boost, key, st.tail]);
+    let tail = st.tail;
+    let bgTag = '';
+    if (alphaOn()) {
+        // 抠色时：摘掉会画背景的标签，并把绿幕要求放到最前面（权重最高）
+        tail = stripBgTags(tail);
+        tpl = tpl.replace(/simple background,?\s*/gi, '');
+        const w = KEY_WORD[S.portraitKey] || 'green';
+        bgTag = 'solid ' + w + ' background, plain background, chroma key, isolated on ' + w + ' background, no background';
+    }
+    return joinTags([gTag, bgTag, tpl, hint, boost, tail]);
 }
 
 export function charNeg(name) {

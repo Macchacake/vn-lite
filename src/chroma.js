@@ -108,7 +108,7 @@ function computeAlpha(d, W, H, opts) {
 
     // 封闭背景块：漫水填不到的地方（两腿之间的缝隙、手臂和身体的空隙）
     // 只要颜色和背景色几乎一样就一起抠掉。阈值收得很紧，避免误伤人物。
-    const pocketLim = 45 * 45;
+    const pocketLim = 110 * 110;
     for (let i = 0; i < N; i++) {
         if (!alpha[i]) continue;
         const p = i * 4;
@@ -153,6 +153,8 @@ function computeAlpha(d, W, H, opts) {
             if (x > 0) add(j - 1);
             if (x < W - 1) add(j + 1);
         }
+        // 面积小的封闭透明块 = 人物身上被误吃出来的小洞（裙褶阴影、鞋面反光之类），补回不透明。
+        // 面积大的才是真背景缝隙（两腿之间、发丝之间的空隙），保持透明。
         if (members.length <= holeMax) for (const j of members) alpha[j] = 255;
     }
 
@@ -171,6 +173,33 @@ function computeAlpha(d, W, H, opts) {
         if (isKey(p) && dist2(d[p], d[p + 1], d[p + 2], sr, sg, sb) <= 120 * 120) kill.push(i);
     }
     for (const i of kill) alpha[i] = 0;
+
+    // 边界处理（两遍，覆盖 2px 的过渡带）：
+    //   1) 柔化：紧贴透明区、颜色还带背景色的像素，按「带多少背景色」给半透明
+    //      —— 原图边缘本来就是抗锯齿混色，一刀切成不透明会留下彩色描边
+    //   2) 去色溢：把主色通道压到不超过另外两个通道，绿光反射的染色就没了
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < N; i++) {
+            if (!alpha[i]) continue;
+            const x = i % W, y = (i - x) / W;
+            let near = false;
+            if (x > 0 && !alpha[i - 1]) near = true;
+            else if (x < W - 1 && !alpha[i + 1]) near = true;
+            else if (y > 0 && !alpha[i - W]) near = true;
+            else if (y < H - 1 && !alpha[i + W]) near = true;
+            if (!near) continue;
+            const p = i * 4;
+            const c = [d[p], d[p + 1], d[p + 2]];
+            const cap = Math.max(c[o1], c[o2]);
+            const spill = c[dom] - cap;
+            if (spill > 0) {
+                const a = Math.max(0, Math.min(255, Math.round(255 * (1 - spill / 34))));
+                if (a < alpha[i]) alpha[i] = a;
+                c[dom] = cap;
+                d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2];
+            }
+        }
+    }
 
     return alpha;
 }

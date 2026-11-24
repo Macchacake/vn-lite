@@ -90,6 +90,25 @@ export function joinTags(list) {
     return out.join(', ');
 }
 
+// 这些标签会「往背景上加东西」（闪粉、光晕、花瓣、景深），
+// 抠透明底时必须摘掉，否则绿幕会被盖住，抠不干净。
+export const BG_TAGS = new Set([
+    'sparkle', 'floating particles', 'bokeh', 'backlighting', 'romantic atmosphere',
+    'lens flare', 'glow', 'halo', 'flower petals', 'cherry blossoms', 'petals',
+    'gradient background', 'detailed background', 'scenery', 'light rays', 'sunburst',
+    'vignette', 'depth of field', 'blurry background', 'flower motif', 'screentone',
+    'halftone', 'speed lines', 'film grain', 'paper texture', 'soft vignette',
+    'wet on wet', 'blooming', 'soft edges', 'soft washes', 'gradient shading',
+]);
+
+export function stripBgTags(tail) {
+    return String(tail || '')
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t && !BG_TAGS.has(t.toLowerCase()))
+        .join(', ');
+}
+
 // 出图尺寸（Animagine XL 官方推荐比例）
 export const SIZE = {
     char: [768, 1344],   // 4:7 竖长条 —— 全身立绘
@@ -126,8 +145,8 @@ export function guessGender(text) {
 
 // 立绘提示词模板（默认全身）
 export const DEFAULT_PORTRAIT_TPL =
-    'solo, single character, full body, standing, head to toe, full-length portrait, feet visible, ' +
-    'looking at viewer, detailed face, detailed eyes, simple background';
+    'solo, single character, full body, standing, front view, head to toe, full-length portrait, ' +
+    'feet visible, looking at viewer, detailed face, detailed eyes';
 
 export const DEFAULT_ITEM_TPL =
     'game item icon, single object, centered, simple dark background, soft rim light';
