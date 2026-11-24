@@ -15,9 +15,9 @@ const queued = new Set();           // kind|key 去重
 let running = false;
 const listeners = new Set();
 
-function init(settings) { S = settings; }
+export function init(settings) { S = settings; }
 
-function onReady(fn) {
+export function onReady(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);
 }

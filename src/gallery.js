@@ -8,7 +8,7 @@ import { save as saveSettings } from './settings.js';
 
 let S = null;
 
-function init(settings) { S = settings; }
+export function init(settings) { S = settings; }
 
 const KIND_LABEL = { bg: '背景', char: '立绘', item: '物品', cg: '插画' };
 
