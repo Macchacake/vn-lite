@@ -5,7 +5,7 @@
 // 下次同一场景/角色/物品直接复用，不再重复生成。
 // ============================================
 
-import { generateCG } from './sd.js';
+import { generateCG, hasMatte } from './sd.js';
 import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
 import { styleOf, SIZE, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
@@ -19,7 +19,7 @@ const listeners = new Set();
 
 // 素材缓存版本：改了提示词结构 / 出图尺寸 / 透明底做法就 +1，
 // 旧图会整体作废，避免用户看到上一版留下的废图。
-const ART_VER = 4;
+const ART_VER = 5;
 
 export function init(settings) {
     S = settings;
@@ -30,7 +30,26 @@ export function init(settings) {
         saveSettings();
         console.log('[VN-Lite] 素材缓存已按新版本重建');
     }
+    refreshMatte();
 }
+
+// 探测服务端有没有抠图能力：有的话立绘改用中性灰幕布（不会溢色），
+// 没有就只能绿幕 + 前端抠色。
+export async function refreshMatte() {
+    if (!S) return false;
+    let ok = false;
+    try { ok = !!(S.sdOn && S.sdUrl && await hasMatte(S.sdUrl)); } catch (e) { ok = false; }
+    if (S._matteOk !== ok) {
+        S._matteOk = ok;
+        // 幕布做法变了，旧立绘得重画
+        if (S.artCache && S.artCache.char) S.artCache.char = {};
+        saveSettings();
+        console.log('[VN-Lite] 服务端抠图' + (ok ? '可用，立绘改用中性灰幕布' : '不可用，退回绿幕抠色'));
+    }
+    return ok;
+}
+
+export function matteOk() { return !!(S && S._matteOk); }
 
 export function onReady(fn) {
     listeners.add(fn);
@@ -118,6 +137,10 @@ const KEY_SPEC = {
     magenta: 'flat pure magenta background, solid chroma key magenta, uniform #FF00FF backdrop, completely flat color, no gradient',
 };
 
+// 有服务端 AI 抠图时用中性灰：灰幕布不会被头发/裙子吃进去，
+// 抠出来不会有一圈绿边（绿幕再怎么 despill 也救不干净半透明发梢）。
+const GREY_SPEC = 'flat medium grey background, solid grey backdrop, completely flat color, no gradient';
+
 function alphaOn() { return !!(S && S.portraitAlpha); }
 
 export function charPrompt(name) {
@@ -127,23 +150,29 @@ export function charPrompt(name) {
     let tail = st.tail;
     let bgTag = '';
     if (alphaOn()) {
-        // 抠色时：摘掉会画背景的标签，再补一条纯色幕布要求。
-        // 注意顺序：角色外观必须排在最前面（权重最高），否则画出来不像本人。
+        // 抠图时：摘掉会画背景的标签，再补一条纯色幕布要求。
         tail = stripBgTags(tail);
         tpl = tpl.replace(/simple background,?\s*/gi, '');
-        bgTag = KEY_SPEC[S.portraitKey] || KEY_SPEC.green;
+        // 「opaque hair」很关键：AI 画飘逸长发时会把它画成半透明，
+        // 幕布颜色从头发里透出来，抠完之后头发是绿的，怎么修都救不回来。
+        const spec = matteOk() ? GREY_SPEC : (KEY_SPEC[S.portraitKey] || KEY_SPEC.green);
+        bgTag = spec + ', opaque solid hair, fully opaque clothing';
     }
-    // 顺序 = 权重：外观 > 构图 > 幕布 > 画风
-    return joinTags([hint, tpl, bgTag, tail]);
+    // 顺序 = 权重：构图 > 外观 > 幕布 > 画风
+    // 构图必须排第一，否则模型容易只顾画脸不管全身；外观紧跟其后保证像本人。
+    return joinTags([tpl, hint, bgTag, tail]);
 }
 
 export function charNeg(name) {
     const st = styleOf(S);
     const parts = [st.preset.neg];
     if (alphaOn()) {
+        // 全身立绘最容易被裁的就是脚，这几个词是实测下来最管用的
+        parts.push('cowboy shot, upper body, close-up, portrait, cropped legs, cut off feet, out of frame');
         parts.push('detailed background, scenery, gradient background, multiple views, multiple characters');
         // 这些会把幕布画脏，是抠图失败的头号原因
         parts.push('vignette, glow, backlighting, light rays, soft focus, depth of field, gradient, noise, texture, drop shadow, reflection');
+        parts.push('translucent hair, transparent hair, see-through hair, glass hair, semi-transparent clothing');
     }
     return parts.filter(Boolean).join(', ');
 }

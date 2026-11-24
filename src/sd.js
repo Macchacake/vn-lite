@@ -139,26 +139,44 @@ function pickModel(models) {
         || models[0];
 }
 
-// ---------- 服务端抠图（ComfyUI 0.37+ 原生 BiRefNet） ----------
+// ---------- 服务端抠图 ----------
+// 两条路都探：
+//   1) ComfyUI 0.37+ 原生 BiRefNet：LoadBackgroundRemovalModel + RemoveBackground
+//   2) 自带的 VN-Lite 抠图节点（onnxruntime + isnet-anime）：VNLLoadMatte + VNLMatte
 // 有就用，没有就退回前端抠色，不影响任何流程。
-const _matteCache = new Map();   // base -> { model } | null
+const _matteCache = new Map();   // base -> { model, kind:'native'|'vnl' } | null
+
+async function nodeInfo(base, name) {
+    try {
+        const r = await fetch(base + '/object_info/' + encodeURIComponent(name), { signal: timeoutSignal(4000) });
+        if (!r.ok) return null;
+        const j = await r.json();
+        return j && j[name] ? j[name] : null;
+    } catch (e) { return null; }
+}
+
+// 从节点定义里取某个 combo 输入的可选值
+function comboOf(def, inputName) {
+    const req = def && def.input && def.input.required && def.input.required[inputName];
+    const list = req && req[0];
+    return Array.isArray(list) ? list : [];
+}
 
 async function matteInfo(base) {
     if (_matteCache.has(base)) return _matteCache.get(base);
     let info = null;
     try {
-        const r = await fetch(base + '/object_info/RemoveBackground', { signal: timeoutSignal(4000) });
-        if (r.ok) {
-            const j = await r.json();
-            if (j && j.RemoveBackground) {
-                const mr = await fetch(base + '/object_info/LoadBackgroundRemovalModel', { signal: timeoutSignal(4000) });
-                const mj = mr.ok ? await mr.json() : null;
-                const list = mj && mj.LoadBackgroundRemovalModel &&
-                    mj.LoadBackgroundRemovalModel.input && mj.LoadBackgroundRemovalModel.input.required &&
-                    mj.LoadBackgroundRemovalModel.input.required.bg_removal_name &&
-                    mj.LoadBackgroundRemovalModel.input.required.bg_removal_name[0];
-                if (Array.isArray(list) && list.length) info = { model: list[0] };
-            }
+        // 1) 原生 BiRefNet
+        if (await nodeInfo(base, 'RemoveBackground')) {
+            const def = await nodeInfo(base, 'LoadBackgroundRemovalModel');
+            const list = comboOf(def, 'bg_removal_name');
+            if (list.length) info = { model: list[0], kind: 'native' };
+        }
+        // 2) VN-Lite 自带节点
+        if (!info && await nodeInfo(base, 'VNLMatte')) {
+            const def = await nodeInfo(base, 'VNLLoadMatte');
+            const list = comboOf(def, 'matte_name');
+            if (list.length) info = { model: list[0], kind: 'vnl' };
         }
     } catch (e) { info = null; }
     _matteCache.set(base, info);
@@ -169,6 +187,13 @@ export async function hasMatte(base) {
     const b = normalizeBase(base);
     if (!b) return false;
     return !!(await matteInfo(b));
+}
+
+// 让设置面板能显示「服务端抠图：可用 / 不可用」
+export async function matteStatus(base) {
+    const b = normalizeBase(base);
+    if (!b) return null;
+    return matteInfo(b);
 }
 
 // ---------- 最小工作流（API 格式） ----------
@@ -195,12 +220,20 @@ function buildWorkflow(model, prompt, opts = {}, matte = null) {
         '8': { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
     };
     if (opts.transparent && matte) {
-        // ComfyUI 0.37+ 原生 BiRefNet：RemoveBackground 出「前景掩膜」，
+        // 两种抠图节点都输出「前景掩膜」（1=人，0=背景）。
         // JoinImageWithAlpha 的 alpha 语义是「透明度」，所以先取反。
-        wf['10'] = { class_type: 'LoadBackgroundRemovalModel', inputs: { bg_removal_name: matte.model } };
-        wf['11'] = { class_type: 'RemoveBackground', inputs: { bg_removal_model: ['10', 0], image: ['8', 0] } };
-        wf['12'] = { class_type: 'InvertMask', inputs: { mask: ['11', 0] } };
-        wf['13'] = { class_type: 'JoinImageWithAlpha', inputs: { image: ['8', 0], alpha: ['12', 0] } };
+        if (matte.kind === 'vnl') {
+            // VN-Lite 节点同时输出「去过溢色的图」和掩膜：0=image 1=mask
+            wf['10'] = { class_type: 'VNLLoadMatte', inputs: { matte_name: matte.model } };
+            wf['11'] = { class_type: 'VNLMatte', inputs: { matte: ['10', 0], image: ['8', 0], despill: 1.0 } };
+            wf['12'] = { class_type: 'InvertMask', inputs: { mask: ['11', 1] } };
+            wf['13'] = { class_type: 'JoinImageWithAlpha', inputs: { image: ['11', 0], alpha: ['12', 0] } };
+        } else {
+            wf['10'] = { class_type: 'LoadBackgroundRemovalModel', inputs: { bg_removal_name: matte.model } };
+            wf['11'] = { class_type: 'RemoveBackground', inputs: { bg_removal_model: ['10', 0], image: ['8', 0] } };
+            wf['12'] = { class_type: 'InvertMask', inputs: { mask: ['11', 0] } };
+            wf['13'] = { class_type: 'JoinImageWithAlpha', inputs: { image: ['8', 0], alpha: ['12', 0] } };
+        }
         wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: 'vnl_char', images: ['13', 0] } };
     } else {
         wf['9'] = { class_type: 'SaveImage', inputs: { filename_prefix: opts.transparent ? 'vnl_char' : 'vnl_cg', images: ['8', 0] } };

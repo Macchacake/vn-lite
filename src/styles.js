@@ -110,9 +110,12 @@ export const SIZE = {
 };
 
 // 立绘提示词模板（默认全身）
+// 注意：不要写 portrait / close-up / face focus —— 这几个词会把构图拉回头肩像，
+// 实测会生成「一张大脸 + 一个全身小人」的怪图。
+// 这串是实测过脚不会被裁、人物约占画面高度 85% 的组合。
 export const DEFAULT_PORTRAIT_TPL =
-    'solo, single character, full body, standing, front view, head to toe, full-length portrait, ' +
-    'feet visible, looking at viewer, detailed face, detailed eyes';
+    'wide shot, full body shot, solo, single character, standing, front view, head to toe, ' +
+    'full-length figure, feet visible, entire body in frame, shoes visible, looking at viewer';
 
 export const DEFAULT_ITEM_TPL =
     'game item icon, single object, centered, simple dark background, soft rim light';

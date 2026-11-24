@@ -63,9 +63,11 @@ function init(extSettings, saveFn, hooks = {}) {
     delete v.artGender;
     v.artCache = Object.assign({ bg: {}, char: {}, item: {}, cg: {} }, v.artCache);
     v.gallery = Array.isArray(v.gallery) ? v.gallery : [];
-    // 老版本默认值迁移：旧画风尾巴 / 旧半身立绘模板
+    // 老版本默认值迁移：旧画风尾巴 / 旧半身立绘模板 / 旧全身模板
     if (v.artStyle === 'anime style, detailed, cinematic lighting') v.artStyle = '';
     if (/upper body/.test(v.portraitTpl || '')) v.portraitTpl = DEFAULT_PORTRAIT_TPL;
+    // 0.7.0 之前那版全身模板会把脚裁掉（含 full-length portrait / detailed face）
+    if (/full-length portrait/.test(v.portraitTpl || '')) v.portraitTpl = DEFAULT_PORTRAIT_TPL;
     if (!STYLE_PRESETS[v.stylePreset]) v.stylePreset = DEFAULT_STYLE;
     S = v;
     applyFont();
@@ -296,16 +298,28 @@ function bindPanel(wrap, hooks) {
             testBtn.addEventListener('click', async () => {
                 out.textContent = '测试中…';
                 try {
-                    const { testConnection } = await import('./sd.js');
+                    const { testConnection, matteStatus } = await import('./sd.js');
                     const r = await testConnection(S, 8000);
                     if (r.ok) {
                         S.sdModelList = Array.isArray(r.models) ? r.models : [];
                         save();
                         paintModels();
                     }
+                    let matteLine = '';
+                    if (r.ok && r.base) {
+                        try {
+                            const m = await matteStatus(r.base);
+                            matteLine = m
+                                ? '\n抠图：✓ 服务端自动抠图已启用（' + (m.kind === 'vnl' ? 'VN-Lite 节点' : 'BiRefNet') + ' · ' + m.model + '）'
+                                : '\n抠图：前端绿幕抠色（没找到抠图节点）';
+                            // 让美术总监按新的抠图能力切换幕布（灰 / 绿）
+                            const { refreshMatte } = await import('./art.js');
+                            await refreshMatte();
+                        } catch (e) { /* 抠图探测失败不影响连接结果 */ }
+                    }
                     out.textContent = r.ok
                         ? '✓ 已连接：' + r.base + '\n模型：' + r.model +
-                          '\n共 ' + S.sdModelList.length + ' 个：' + S.sdModelList.join('、')
+                          '\n共 ' + S.sdModelList.length + ' 个：' + S.sdModelList.join('、') + matteLine
                         : '✗ ' + r.reason + (r.base ? '\n地址：' + r.base : '');
                 } catch (e) {
                     out.textContent = '✗ 测试失败：' + (e && e.message ? e.message : e);
