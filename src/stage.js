@@ -178,6 +178,9 @@ function createStage(script, env) {
         state.interactive = false;
         if (seg.t !== 'cg') hideCG();
         lastTextLen = (seg.text || '').length;
+
+        // 交互段落结束后推进：必须先解除 interactive，否则 next() 会直接返回
+        const advance = () => { state.interactive = false; next(); };
         if (seg.t === 'say') {
             const who = seg.who;
             if (who) {
@@ -203,14 +206,14 @@ function createStage(script, env) {
             renderChoices(textEl, seg.opts, {
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
-                onPick: () => next(),
+                onPick: () => advance(),
             });
             state.interactive = true;
         } else if (seg.t === 'qte') {
             nameEl.style.display = 'none';
             textEl.className = 'vnl-text vnl-narr';
             textEl.textContent = seg.text;
-            renderQTE(textEl, () => setTimeout(() => next(), 900));
+            renderQTE(textEl, () => setTimeout(() => advance(), 900));
             state.interactive = true;
         } else if (seg.t === 'cg') {
             // [cg:prompt] — AI 生成插画，异步加载不阻塞演出
@@ -262,7 +265,7 @@ function createStage(script, env) {
                 okText: seg.okText, failText: seg.failText,
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
-                onDone: () => next(),
+                onDone: () => advance(),
             });
             state.interactive = true;
         } else if (seg.t === 'input') {
@@ -272,7 +275,7 @@ function createStage(script, env) {
             renderInput(textEl, {
                 hint: seg.hint,
                 sendUserMessage: env.sendUserMessage,
-                onDone: () => next(),
+                onDone: () => advance(),
             });
             state.interactive = true;
         }
