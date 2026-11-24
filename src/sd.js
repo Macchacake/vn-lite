@@ -45,18 +45,23 @@ function candidateBases(S) {
                 add(here.protocol + '//' + here.hostname + ':8189');
             }
             if (here.hostname === '127.0.0.1' || here.hostname === 'localhost') {
+                // 18188 = adb reverse 的约定端口（手机通过 USB 连电脑时用）
+                // 走 adb reverse tcp:18188 tcp:8188，手机开梯子、关 WiFi 都不影响
+                add('http://127.0.0.1:18188');
+                add('http://127.0.0.1:18189');
                 add('http://127.0.0.1:8188');
                 add('http://127.0.0.1:8189');
+                add('http://localhost:18188');
                 add('http://localhost:8188');
-                add('http://localhost:8189');
             }
         } catch { /* location 不可用时忽略 */ }
     }
 
+    add('http://127.0.0.1:18188');
     add('http://127.0.0.1:8188');
     add('http://127.0.0.1:8189');
+    add('http://localhost:18188');
     add('http://localhost:8188');
-    add('http://localhost:8189');
     return out;
 }
 
