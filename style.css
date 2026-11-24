@@ -1126,3 +1126,185 @@
     color: #9fb3d4;
 }
 .vnl-endbtn-dim:hover { opacity: 1; }
+
+/* ============================================================
+   v0.9 视觉升级：视觉小说（人狼村之谜 / 手机文字游戏）风格
+   只改观感，不改 DOM 结构和交互逻辑。参考要点：
+   - 对话框：深色磨砂玻璃 + 上方说话人名牌（带小尖角），更有"游戏感"
+   - 选项：编号圆点 + 卡片式，一眼看出是可选行动，触控区更大
+   - 顶部渐变蒙层：顶栏文字在亮背景上也看得清
+   - 背景铺满全屏（剧场内），不再是 9:16 黑边小窗
+   ============================================================ */
+
+/* --- 剧场舞台铺满整屏（去掉 9:16 黑边，人物/背景占满手机屏） --- */
+.vnl-theater .vnl-stage-slot { padding: 0; }
+.vnl-theater .vnl-stage {
+    height: 100%;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    aspect-ratio: auto;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* --- 顶部渐变蒙层：顶栏按键始终可读 --- */
+.vnl-theater-head {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    z-index: 12;
+    background: linear-gradient(to bottom, rgba(3, 5, 12, 0.82), rgba(3, 5, 12, 0));
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding-bottom: 22px;
+    pointer-events: none;
+}
+.vnl-theater-head .vnl-btn { pointer-events: auto; }
+
+/* --- 对话框：磨砂玻璃 + 柔和发光边 --- */
+.vnl-theater .vnl-dialog {
+    left: 4%;
+    right: 4%;
+    bottom: calc(4% + env(safe-area-inset-bottom, 0px));
+    min-height: 22%;
+    background: linear-gradient(135deg, rgba(18, 23, 38, 0.9), rgba(10, 14, 24, 0.94));
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    backdrop-filter: blur(10px) saturate(1.2);
+    border: 1px solid rgba(170, 195, 240, 0.28);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    padding: 16px 16px 20px;
+}
+/* 说话人名牌：渐变徽章 + 下方小尖角 */
+.vnl-theater .vnl-name {
+    top: -14px;
+    left: 14px;
+    padding: 4px 16px;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.vnl-theater .vnl-name::after {
+    content: '';
+    position: absolute;
+    left: 18px;
+    bottom: -5px;
+    width: 9px; height: 9px;
+    background: inherit;
+    transform: rotate(45deg);
+    border-right: 1px solid rgba(255, 255, 255, 0.18);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+/* 文字：加轻微阴影，亮背景立绘上也清楚 */
+.vnl-theater .vnl-text {
+    line-height: 1.85;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+}
+
+/* --- 选项：编号圆点卡片，游戏化 --- */
+.vnl-choices { counter-reset: vnl-opt; gap: 10px; }
+.vnl-choice-btn {
+    counter-increment: vnl-opt;
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    padding: 13px 16px 13px 14px;
+    min-height: 52px;
+    font-size: calc(var(--vnl-fs, 17px) * 0.94);
+    line-height: 1.5;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(38, 52, 84, 0.82), rgba(22, 30, 52, 0.9));
+    border: 1px solid rgba(140, 175, 235, 0.32);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition: transform 0.15s ease, background 0.2s, border-color 0.2s;
+}
+/* 序号圆点（纯 CSS counter，不碰 DOM，二次确认的 textContent 不会覆盖它） */
+.vnl-choice-btn::before {
+    content: counter(vnl-opt);
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(126, 166, 238, 0.22);
+    border: 1px solid rgba(150, 185, 245, 0.5);
+    color: #dce9ff;
+    font-size: 13px;
+    font-weight: 700;
+}
+.vnl-choice-btn:active { transform: scale(0.98); }
+.vnl-choice-btn.armed {
+    background: linear-gradient(135deg, rgba(70, 122, 216, 0.75), rgba(46, 88, 170, 0.85));
+    border-color: #b9d4ff;
+    box-shadow: 0 0 0 2px rgba(157, 192, 255, 0.5), 0 0 22px rgba(120, 170, 255, 0.35);
+    animation: vnl-armed-pulse 1.6s ease-in-out infinite;
+}
+.vnl-choice-btn.armed::before { background: rgba(255, 255, 255, 0.28); color: #fff; }
+@keyframes vnl-armed-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(157, 192, 255, 0.45), 0 0 16px rgba(120, 170, 255, 0.25); }
+    50% { box-shadow: 0 0 0 3px rgba(157, 192, 255, 0.7), 0 0 26px rgba(120, 170, 255, 0.45); }
+}
+.vnl-choice-hint {
+    color: #b6c6e2;
+    font-size: 12.5px;
+    background: rgba(10, 14, 24, 0.55);
+    border-radius: 8px;
+    padding: 5px 8px;
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+}
+
+/* --- 顶部/输入条：磨砂 --- */
+.vnl-composer {
+    background: linear-gradient(to top, rgba(6, 9, 17, 0.96), rgba(10, 14, 24, 0.82));
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(150, 175, 220, 0.18);
+}
+
+/* --- 立绘：底部投影，站地感 --- */
+.vnl-sprite img { filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5)); }
+
+/* --- 设置面板分段导航（横向滑动，点一下滚到对应块） --- */
+.vnl-set-nav {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 6px 0 8px;
+    margin-bottom: 2px;
+    background: linear-gradient(to bottom, rgba(12, 16, 28, 0.98), rgba(12, 16, 28, 0.86));
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+}
+.vnl-set-nav::-webkit-scrollbar { display: none; }
+.vnl-set-nav-btn {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 6px 13px;
+    border-radius: 18px;
+    background: rgba(40, 52, 78, 0.7);
+    border: 1px solid rgba(130, 160, 210, 0.25);
+    color: #aebcd6;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.vnl-set-nav-btn.on {
+    background: linear-gradient(135deg, #4a7bc8, #5f8fdd);
+    border-color: #8fb6f2;
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 2px 10px rgba(74, 123, 200, 0.4);
+}
+.vnl-settings-body .vnl-set-section { scroll-margin-top: 52px; }
+.vnl-settings-body { position: relative; }

@@ -25,6 +25,7 @@ import * as settings from './src/settings.js';
 import * as art from './src/art.js';
 import * as gallery from './src/gallery.js';
 import * as session from './src/session.js';
+import * as memory from './src/memory.js';
 import { parseMessage, resetLearned } from './src/parser.js';
 import * as looks from './src/looks.js';
 import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
@@ -122,13 +123,15 @@ function absorbLooks(script) {
     if (!S.artPrompts) S.artPrompts = {};
     if (!S.lookAuto) S.lookAuto = {};
     let changed = false;
+    if (!S.lookSource) S.lookSource = {};
     for (const [name, tags] of Object.entries(script.looks)) {
         const cur = S.artPrompts[name];
-        const autoOwned = S.lookAuto[name] === true;
+        const autoOwned = S.lookAuto[name] === true || S.lookSource[name] === 'memory' || S.lookSource[name] === 'auto';
         if (cur && !autoOwned) continue;      // 用户自己写的，别动
         if (cur === tags) continue;
         S.artPrompts[name] = tags;
         S.lookAuto[name] = true;
+        S.lookSource[name] = 'auto';
         if (S.artCache && S.artCache.char) delete S.artCache.char[name];
         changed = true;
     }
@@ -140,6 +143,7 @@ async function generateLooks(onlyNames = null) {
     const S = settings.get();
     if (!S.artPrompts) S.artPrompts = {};
     if (!S.lookAuto) S.lookAuto = {};
+    if (!S.lookSource) S.lookSource = {};
     let chars = currentCharacters().slice(0, 40);
     if (Array.isArray(onlyNames) && onlyNames.length) {
         const want = new Set(onlyNames);
@@ -148,16 +152,18 @@ async function generateLooks(onlyNames = null) {
     if (!chars.length) return { ok: 0, total: 0, reason: '当前没有角色' };
     let ok = 0;
     for (const c of chars) {
-        if (S.artPrompts[c.name] && S.lookAuto[c.name] !== true) continue;  // 用户写过的跳过
+        // 用户手填的跳过；记忆自动填的允许 AI 润色覆盖（数据更全）
+        if (S.artPrompts[c.name] && S.lookAuto[c.name] !== true && S.lookSource[c.name] !== 'memory') continue;
 
         // 第一步（同步兜底）：直接从角色卡抽外观。
         // 关键：以前这一步全押在 LLM 上，手机端 LLM 没配好/接口一变就全军覆没，
         // artPrompts 空 → prefetch 不画 → 满屏剪影。先把卡里写的外观落地，
         // 立绘立刻能生成；LLM 只是后面用来「润色」，不再是唯一来源。
         const fallback = looks.looksFromCard(c);
-        if (fallback) {
+        if (fallback && (!S.artPrompts[c.name] || S.lookAuto[c.name] === true || S.lookSource[c.name] === 'memory')) {
             S.artPrompts[c.name] = fallback;
             S.lookAuto[c.name] = true;
+            S.lookSource[c.name] = 'auto';
             if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
             ok++;
         }
@@ -194,6 +200,7 @@ ${desc || '（这张卡没有写外观，请按名字给一个合理的日系角
             if (out && /1girl|1boy/.test(out) && out.split(',').length >= 3) {
                 S.artPrompts[c.name] = out;
                 S.lookAuto[c.name] = true;
+                S.lookSource[c.name] = 'auto';
                 if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
                 if (!fallback) ok++;
             }
@@ -444,6 +451,20 @@ async function init() {
     gallery.init(settings.get());
     // 绑定当前对话（本地图片按对话隔离）；图集/缓存都从这里取 scope
     syncChatKey();
+
+    // 记忆插件联动（柏宝书等）：把人物外貌/地点描述自动灌进立绘/背景提示词。
+    // 把当前用户名写进设置，供主角(memory 里没有 name 字段)对应立绘。
+    if (name1 && !settings.get().userName) settings.get().userName = name1;
+    memory.init(settings.get(), saveSettingsDebounced, {
+        onChanged: () => {
+            // 记忆更新可能改了外观提示词 → 让舞台重新取图
+            try { art.hydrateChat(); } catch (e) { /* 忽略 */ }
+            if (isOpen()) {
+                // 已打开剧场时，重新渲染当前聊天让新提示词生效
+                try { document.querySelectorAll('.vnl-stage').forEach(s => s.__vnlReRender && s.__vnlReRender()); } catch (e) { /* 忽略 */ }
+            }
+        },
+    });
 
     // BGM 初始状态 + 解锁
     bgm.setEnabled(settings.get().bgmOn);

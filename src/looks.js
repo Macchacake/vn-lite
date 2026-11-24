@@ -63,6 +63,33 @@ const TRAIT = [
     [/辫子/, 'braid'],
     [/伤疤|疤痕/, 'scar'],
     [/绷带/, 'bandages'],
+    [/耳环|耳饰/, 'earrings'],
+    [/项链|挂坠/, 'necklace'],
+];
+// 服装（柏宝书的 npc.outfit / protagonist.outfit 常写这些）
+const OUTFIT = [
+    [/风衣|大衣/, 'trench coat'],
+    [/和服|浴衣/, 'kimono'],
+    [/制服/, 'uniform'],
+    [/西装|正装/, 'suit'],
+    [/盔甲|铠甲/, 'armor'],
+    [/斗篷|披风/, 'cape'],
+    [/连衣裙|长裙/, 'dress'],
+    [/旗袍/, 'qipao'],
+    [/道袍|道服|宗门服饰/, 'chinese robes'],
+    [/卫衣|连帽/, 'hoodie'],
+    [/毛衣/, 'sweater'],
+    [/衬衫/, 'shirt'],
+    [/短裙/, 'skirt'],
+    [/牛仔裤/, 'jeans'],
+];
+// 体型
+const BUILD = [
+    [/高挑|修长|身材高/, 'tall'],
+    [/娇小|矮小|小巧/, 'short stature'],
+    [/瘦削|纤瘦|清瘦|瘦/, 'slim'],
+    [/丰满|丰腴/, 'curvy'],
+    [/健壮|魁梧|壮硕/, 'muscular'],
 ];
 
 function pick(list, text, out) {
@@ -111,4 +138,62 @@ export function looksFromCard(card) {
     // 至少要性别 + 一个外观特征，才算可用
     if (parts.length < 2) return null;
     return [...new Set(parts)].join(', ');
+}
+
+/**
+ * 从「记忆插件的人物档案」抽英文外观标签。
+ * 柏宝书 npc 结构：{ name, gender, age, desc(固定外貌), outfit(当前着装), title }
+ * 主角结构：{ gender, age, appearance, outfit, identity }
+ * 和 looksFromCard 共用同一套中文→标签词表，但字段是分开的，这里拼成一段再抽。
+ */
+export function looksFromMemory(person) {
+    if (!person || typeof person !== 'object') return null;
+    const pieces = [person.desc, person.appearance, person.outfit, person.title]
+        .filter(Boolean).join('，');
+    if (!pieces) return null;
+
+    // 性别：记忆里 gender 是明确的「男/女/female/male」，优先用它
+    let gender = null;
+    const g = String(person.gender || '').trim();
+    if (/^(男|male|boy|男性|男生)/i.test(g)) gender = '1boy';
+    else if (/^(女|female|girl|女性|女生)/i.test(g)) gender = '1girl';
+
+    const out = [];
+    if (gender) out.push(gender);
+
+    const text = pieces.slice(0, 1200);
+    // 复用角色卡那套抽取（性别靠上面显式字段，这里只取外观特征）
+    pick(HAIR_ZH, text, out);
+    pick(HAIR_EN, text, out);
+    pick(EYE, text, out);
+    pick(HAIR_STYLE, text, out);
+    pick(TRAIT, text, out);
+    pick(OUTFIT, text, out);
+    pick(BUILD, text, out);
+    if (out.includes('medium length hair')) {
+        const i = out.indexOf('long hair');
+        if (i >= 0) out.splice(i, 1);
+    }
+    // 年龄感
+    const age = String(person.age || '');
+    const atext = age + ' ' + text.slice(0, 200);
+    if (/少年|少女|学生|1[0-7]\s*(?:岁|年)/.test(atext)) out.push('young');
+    else if (/成年|2\d\s*岁|职场|社会人/.test(atext)) out.push('adult');
+
+    if (out.length < 2) return null;
+    return [...new Set(out)].join(', ');
+}
+
+/**
+ * 从记忆里的地点描述抽英文背景标签（复用 art.js 的中文场景词表思路，
+ * 但这里是独立模块，避免循环依赖：直接返回中文原文 + 通用背景标签，
+ * 由 art.js 的 scenePrompt 再加工）。
+ */
+export function sceneFromMemory(scene) {
+    if (!scene) return null;
+    const name = String(scene.name || '').trim();
+    const desc = String(scene.desc || '').trim();
+    const path = Array.isArray(scene.path) ? scene.path.join('·') : '';
+    if (!name && !desc) return null;
+    return { name, desc, path: path || name };
 }

@@ -214,12 +214,29 @@ const SCENE_KW_EN = [
 
 export function scenePrompt(cat) {
     const key = String(cat || '').trim();
+    // 记忆插件（柏宝书）提供的地点描述：优先于场景名做关键词匹配。
+    // 例：地点「归雁客栈」在记忆里写着「木制二层客栈，红灯笼，热闹大堂」，
+    // 用这段描述抽标签比光看名字更贴合剧情实际场景。
+    let memDesc = '';
+    if (S && S.sceneHints) {
+        memDesc = S.sceneHints[key] || '';
+        if (!memDesc) {
+            for (const [k, v] of Object.entries(S.sceneHints)) {
+                if (key && (key.includes(k) || k.includes(key))) { memDesc = v; break; }
+            }
+        }
+    }
     let base = SCENE_PROMPT[key];
     if (!base) {
         // 没命中预设表：按中文关键词拼英文标签（最多 3 组，避免提示词打架）
         const tags = [];
-        for (const [re, en] of SCENE_KW_EN) {
-            if (re.test(key) && !tags.includes(en)) tags.push(en);
+        // 先抽记忆描述，再抽场景名补足
+        for (const src of [memDesc, key]) {
+            if (!src) continue;
+            for (const [re, en] of SCENE_KW_EN) {
+                if (re.test(src) && !tags.includes(en)) tags.push(en);
+                if (tags.length >= 3) break;
+            }
             if (tags.length >= 3) break;
         }
         base = tags.length ? tags.join(', ') : 'anime background art, detailed scenery';

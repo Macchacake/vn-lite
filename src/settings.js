@@ -6,6 +6,7 @@
 
 import { DEFAULT_PROTOCOL } from './protocol.js';
 import { STYLE_PRESETS, DEFAULT_STYLE, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
+import * as memory from './memory.js';
 
 const DEFAULTS = {
     enabled: true,
@@ -42,6 +43,9 @@ const DEFAULTS = {
     portraitKey: 'green',  // 抠色用的背景色
     artPrompts: {},     // 角色/物品 → 额外英文提示词
     lookAuto: {},       // 记录哪些角色提示词是 AI 自动写的（可被覆盖）
+    memorySync: true,   // 自动同步柏宝书等记忆插件的人物/地点/相貌
+    sceneHints: {},     // 地点名 → 记忆里的场景描述（用于生成背景）
+    lookSource: {},     // 提示词来源标记：manual / memory / auto
     artVer: 0,          // 素材缓存版本（art.js 里比对，不一致就整体重建）
     artCache: { bg: {}, char: {}, item: {}, cg: {} },
     gallery: [],        // 图集（只存 ComfyUI 文件名）
@@ -61,6 +65,9 @@ function init(extSettings, saveFn, hooks = {}) {
     v.sdModelList = Array.isArray(v.sdModelList) ? v.sdModelList : [];
     v.artPrompts = (v.artPrompts && typeof v.artPrompts === 'object') ? v.artPrompts : {};
     v.lookAuto = (v.lookAuto && typeof v.lookAuto === 'object') ? v.lookAuto : {};
+    v.sceneHints = (v.sceneHints && typeof v.sceneHints === 'object') ? v.sceneHints : {};
+    v.lookSource = (v.lookSource && typeof v.lookSource === 'object') ? v.lookSource : {};
+    if (typeof v.memorySync !== 'boolean') v.memorySync = true;
     delete v.artGender;
     v.artCache = Object.assign({ bg: {}, char: {}, item: {}, cg: {} }, v.artCache);
     v.gallery = Array.isArray(v.gallery) ? v.gallery : [];
@@ -125,9 +132,48 @@ function mountPanel(host, hooks = {}) {
     if (!host) return null;
     host.innerHTML = settingsHTML();
     const wrap = host.querySelector('.vnl-set');
-    if (wrap) bindPanel(wrap, hooks);
+    if (wrap) {
+        buildSectionNav(wrap);   // 顶部分段导航：点一下滚到对应设置块
+        bindPanel(wrap, hooks);
+    }
     applyFont();
     return wrap;
+}
+
+// 依据每个 .vnl-set-section 的标题，自动生成一条可横向滚动的分段导航。
+// 不改动任何控件 id / 绑定逻辑，只是给 section 加锚点 + 点击滚动。
+function buildSectionNav(wrap) {
+    const sections = Array.from(wrap.querySelectorAll('.vnl-set-section'));
+    if (!sections.length) return;
+    const nav = document.createElement('div');
+    nav.className = 'vnl-set-nav';
+    sections.forEach((sec, i) => {
+        const titleEl = sec.querySelector('.vnl-set-title');
+        const label = titleEl ? titleEl.textContent.trim() : ('第' + (i + 1) + '项');
+        sec.id = 'vnl-sec-' + i;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'vnl-set-nav-btn' + (i === 0 ? ' on' : '');
+        b.textContent = label;
+        b.addEventListener('click', () => {
+            nav.querySelectorAll('.vnl-set-nav-btn').forEach(x => x.classList.remove('on'));
+            b.classList.add('on');
+            try { sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { sec.scrollIntoView(); }
+        });
+        nav.appendChild(b);
+    });
+    wrap.insertBefore(nav, wrap.firstChild);
+    // 滚动时高亮当前所在区块
+    const scroller = wrap.closest('.vnl-settings-body') || wrap.parentElement;
+    if (scroller && scroller.addEventListener) {
+        scroller._vnlNavHandler && scroller.removeEventListener('scroll', scroller._vnlNavHandler);
+        scroller._vnlNavHandler = () => {
+            let cur = 0;
+            sections.forEach((s, i) => { if (s.offsetTop - 90 <= scroller.scrollTop) cur = i; });
+            nav.querySelectorAll('.vnl-set-nav-btn').forEach((b, i) => b.classList.toggle('on', i === cur));
+        };
+        scroller.addEventListener('scroll', scroller._vnlNavHandler, { passive: true });
+    }
 }
 
 function bindPanel(wrap, hooks) {
@@ -387,6 +433,41 @@ function bindPanel(wrap, hooks) {
         });
     }
 
+    // --- 记忆插件联动 ---
+    const memSync = wrap.querySelector('#vnl-memsync');
+    const memStatus = wrap.querySelector('#vnl-mem-status');
+    const paintMemStatus = () => {
+        const st = memory.status();
+        if (memStatus) memStatus.textContent = st.text || '';
+    };
+    if (memSync) {
+        memSync.checked = !!S.memorySync;
+        memSync.addEventListener('change', () => {
+            S.memorySync = memSync.checked;
+            save();
+            if (memSync.checked) memory.syncManually();
+            paintMemStatus();
+        });
+    }
+    const memBtn = wrap.querySelector('#vnl-mem-sync');
+    if (memBtn) {
+        paintMemStatus();
+        memBtn.addEventListener('click', () => {
+            memBtn.disabled = true;
+            const old = memBtn.textContent;
+            memBtn.textContent = '同步中…';
+            try {
+                const st = memory.syncManually();
+                paintMemStatus();
+                flash(wrap, st.available ? '已同步记忆数据' : '未检测到柏宝书：' + st.text);
+                bindPromptList(wrap, hooks);   // 刷新来源标记
+            } finally {
+                memBtn.disabled = false;
+                memBtn.textContent = old;
+            }
+        });
+    }
+
     // --- 素材映射编辑器 ---
     bindMapEditor(wrap, 'chars', '角色名', '立绘图片 URL（留空用剪影）');
     bindMapEditor(wrap, 'scenes', '场景类目', '背景图片 URL（留空用内置 SVG）');
@@ -431,8 +512,11 @@ function bindPromptList(wrap, hooks) {
     for (const c of list.slice(0, 40)) {
         const row = document.createElement('div');
         row.className = 'vnl-prompt-row';
+        const src = S.lookSource && S.lookSource[c.name];
         const isAuto = S.lookAuto && S.lookAuto[c.name] === true;
-        const badge = isAuto ? 'AI 生成' : (S.artPrompts[c.name] ? '手动' : '未设置 · 立绘会是随机角色');
+        const badge = src === 'memory' ? '记忆自动'
+            : isAuto ? 'AI 生成'
+            : (S.artPrompts[c.name] ? '手动' : '未设置 · 立绘会是随机角色');
         row.innerHTML = `<div class="vnl-prompt-head">
                 <span class="vnl-prompt-name">${escAttr(c.name)}</span>
                 <span class="vnl-prompt-badge">${badge}</span>
@@ -443,8 +527,10 @@ function bindPromptList(wrap, hooks) {
         inp.addEventListener('change', () => {
             const v = inp.value.trim();
             if (v) S.artPrompts[c.name] = v; else delete S.artPrompts[c.name];
-            // 用户改过 → 归用户所有，AI 之后不再覆盖
+            // 用户改过 → 归用户所有，AI / 记忆之后都不再覆盖
             if (S.lookAuto) delete S.lookAuto[c.name];
+            if (!S.lookSource) S.lookSource = {};
+            if (v) S.lookSource[c.name] = 'manual'; else delete S.lookSource[c.name];
             if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
             save();
         });
@@ -601,6 +687,19 @@ function settingsHTML() {
                 <input type="checkbox" id="vnl-autochoice">
             </div>
             <small>开启后，即使 AI 没写 [choice:] 或选项列表，也会在每幕结尾自动补三个可点行动，保证永远有东西可点。关闭后选项只在文游界面内推进，不自动发送到酒馆聊天。</small>
+        </div>
+
+        <div class="vnl-set-section">
+            <div class="vnl-set-title">记忆插件联动</div>
+            <small>自动读取「柏宝书」等记忆插件里的人物相貌、地点场景，关联到立绘和背景。装了柏宝书并开启后，人物立绘按记忆里的长相生成、背景按当前地点生成，无需手动填表。手填的提示词不会被覆盖。</small>
+            <div class="vnl-set-row">
+                <label>自动同步记忆</label>
+                <input type="checkbox" id="vnl-memsync">
+            </div>
+            <div class="vnl-set-row">
+                <button class="vnl-map-add" id="vnl-mem-sync" style="flex:0 0 auto">立即同步</button>
+                <small id="vnl-mem-status" style="flex:1;word-break:break-all"></small>
+            </div>
         </div>
 
         <div class="vnl-set-section">
