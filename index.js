@@ -163,15 +163,36 @@ function installWandButton() {
     return true;
 }
 
+// 酒馆有时会重建 #extensionsMenu（比如保存设置、重载扩展），
+// 我们塞进去的按钮会被一起清掉，所以用 MutationObserver 兜住。
+function watchWandMenu() {
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu || menu.dataset.vnlWatched) return;
+    menu.dataset.vnlWatched = '1';
+    try {
+        const obs = new MutationObserver(() => {
+            if (!document.getElementById('vnl-wand-btn')) installWandButton();
+        });
+        obs.observe(menu, { childList: true });
+    } catch (e) {
+        console.warn('[VN-Lite] 魔棒菜单监听失败', e);
+    }
+}
+
 function waitForWandButton() {
     const wand = document.getElementById('extensionsMenuButton');
     if (wand && !wand.dataset.vnlBound) {
         wand.dataset.vnlBound = '1';
-        wand.addEventListener('click', () => setTimeout(installWandButton, 60));
+        wand.addEventListener('click', () => setTimeout(() => {
+            installWandButton();
+            watchWandMenu();
+        }, 60));
     }
+    watchWandMenu();
     if (installWandButton()) return;
     let tries = 0;
     const timer = setInterval(() => {
+        watchWandMenu();
         if (installWandButton() || ++tries > 60) clearInterval(timer);
     }, 500);
 }
