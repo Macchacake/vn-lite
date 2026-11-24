@@ -1,2 +1,11 @@
 vn-lite.zip
-vn-lite.zip
+
+# 隧道相关：令牌和运行时产物绝不入库
+tools/tunnel/token.txt
+tools/tunnel/public-url.txt
+tools/tunnel/*.log
+tools/tunnel/*.pid
+
+# 本地临时
+_h/
+*.tmp
