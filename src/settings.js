@@ -312,6 +312,23 @@ function bindMapEditor(wrap, key, namePh, urlPh) {
                 S.maps[key][k] = inpV.value.trim(); save(); fireChanged();
             });
             tbody.appendChild(tr);
+
+            // 角色额外一行：英文提示词（AI 生成立绘时用）
+            if (key === 'chars') {
+                const tr2 = document.createElement('tr');
+                tr2.className = 'vnl-map-prompt-row';
+                tr2.innerHTML = `<td colspan="3"><input data-p="1" value="${escAttr(S.artPrompts[k] || '')}"
+                    placeholder="英文提示词（可选）：1girl, silver hair, white dress, gentle smile"></td>`;
+                const pi = tr2.querySelector('input');
+                pi.addEventListener('change', () => {
+                    const v = pi.value.trim();
+                    if (v) S.artPrompts[k] = v; else delete S.artPrompts[k];
+                    // 提示词变了 → 旧立绘作废，下次重新生成
+                    if (S.artCache && S.artCache.char) delete S.artCache.char[k];
+                    save();
+                });
+                tbody.appendChild(tr2);
+            }
         }
     };
     addBtn.addEventListener('click', () => {

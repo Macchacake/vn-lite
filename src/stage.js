@@ -112,10 +112,10 @@ function createStage(script, env) {
     // 立绘图片：手动映射 > AI 生成 > 剪影
     function spriteSrc(name, expr) {
         const mapped = env.resolveChar ? env.resolveChar(name) : null;
-        if (mapped) return mapped;
+        if (mapped) return { src: mapped, gen: false };
         const gen = peekArt('char', name);
-        if (gen) return gen;
-        return silhouetteURI(name, expr);
+        if (gen) return { src: gen, gen: true };
+        return { src: silhouetteURI(name, expr), gen: false };
     }
 
     // 生图完成 → 实时替换到舞台上
@@ -125,7 +125,7 @@ function createStage(script, env) {
             bgFront.style.backgroundImage = `url("${url}")`;
         } else if (kind === 'char' && state.onStage.has(key)) {
             const img = state.onStage.get(key).node.querySelector('img');
-            if (img) img.src = url;
+            if (img) { img.src = url; img.dataset.gen = '1'; }
         }
     });
 
@@ -135,8 +135,12 @@ function createStage(script, env) {
             const info = state.onStage.get(name);
             if (expr) info.expr = expr;
             const img = info.node.querySelector('img');
-            const src = spriteSrc(name, expr || info.expr);
-            if (img && img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
+            const r = spriteSrc(name, expr || info.expr);
+            if (img && img.dataset.src !== r.src) {
+                img.dataset.src = r.src;
+                img.dataset.gen = r.gen ? '1' : '0';
+                img.src = r.src;
+            }
             return;
         }
         // 超过 3 个：移除最早且当前不在说话的
@@ -149,9 +153,10 @@ function createStage(script, env) {
         node.className = 'vnl-sprite';
         const img = document.createElement('img');
         img.alt = name; img.draggable = false;
-        const src = spriteSrc(name, expr);
-        img.dataset.src = src;
-        img.src = src;
+        const r = spriteSrc(name, expr);
+        img.dataset.src = r.src;
+        img.dataset.gen = r.gen ? '1' : '0';
+        img.src = r.src;
         const label = document.createElement('div');
         label.className = 'vnl-sname'; label.textContent = name;
         node.append(img, label);

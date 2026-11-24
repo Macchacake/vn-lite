@@ -971,3 +971,19 @@
     text-align: center;
 }
 .vnl-gal-close { min-height: 44px; padding: 0 28px; }
+
+/* ---------- AI 生成的立绘：做成带边框的立绘卡，避免硬边 ---------- */
+.vnl-sprite img[data-gen="1"] {
+    border-radius: 14px 14px 8px 8px;
+    border: 1px solid rgba(170, 195, 240, 0.22);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+    -webkit-mask-image: linear-gradient(180deg, #000 86%, rgba(0, 0, 0, 0) 100%);
+    mask-image: linear-gradient(180deg, #000 86%, rgba(0, 0, 0, 0) 100%);
+}
+.vnl-map-prompt-row td { padding: 2px 0 10px; }
+.vnl-map-prompt-row input {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 12px;
+    min-height: 32px;
+}
