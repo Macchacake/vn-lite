@@ -5,7 +5,7 @@
 // 下次同一场景/角色/物品直接复用，不再重复生成。
 // ============================================
 
-import { generateCG, hasMatte } from './sd.js';
+import { generateCG, hasMatte, candidateBases } from './sd.js';
 import { addToGallery } from './gallery.js';
 import { save as saveSettings } from './settings.js';
 import { styleOf, SIZE, joinTags, stripBgTags, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
@@ -35,10 +35,19 @@ export function init(settings) {
 
 // 探测服务端有没有抠图能力：有的话立绘改用中性灰幕布（不会溢色），
 // 没有就只能绿幕 + 前端抠色。
+// 注意：和出图一样要走「多地址」逻辑 —— 手机可能通过 USB 转发、
+// 局域网、Tailscale 三种方式连到同一台 ComfyUI，只探 sdUrl 会误判。
 export async function refreshMatte() {
     if (!S) return false;
     let ok = false;
-    try { ok = !!(S.sdOn && S.sdUrl && await hasMatte(S.sdUrl)); } catch (e) { ok = false; }
+    try {
+        if (S.sdOn) {
+            const bases = candidateBases(S).slice(0, 4);
+            for (const b of bases) {
+                if (await hasMatte(b)) { ok = true; break; }
+            }
+        }
+    } catch (e) { ok = false; }
     if (S._matteOk !== ok) {
         S._matteOk = ok;
         // 幕布做法变了，旧立绘得重画
