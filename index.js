@@ -116,11 +116,15 @@ function absorbLooks(script) {
 }
 
 // ---------- 让 AI 写角色外观标签 ----------
-async function generateLooks() {
+async function generateLooks(onlyNames = null) {
     const S = settings.get();
     if (!S.artPrompts) S.artPrompts = {};
     if (!S.lookAuto) S.lookAuto = {};
-    const chars = currentCharacters().slice(0, 40);
+    let chars = currentCharacters().slice(0, 40);
+    if (Array.isArray(onlyNames) && onlyNames.length) {
+        const want = new Set(onlyNames);
+        chars = chars.filter(c => want.has(c.name));
+    }
     if (!chars.length) return { ok: 0, total: 0, reason: '当前没有角色' };
     let ok = 0;
     for (const c of chars) {
@@ -155,6 +159,44 @@ ${desc || '（这张卡没有写外观，请按名字给一个合理的日系角
     }
     settings.save();
     return { ok, total: chars.length };
+}
+
+// 自动补齐缺失的外观标签：没有标签就不许画立绘，否则模型会随机编人。
+// 只在开启自动生图时跑，且每个角色只跑一次（lookAuto 落盘后不会再生成）。
+const _looksInFlight = new Set();
+function ensureLooks(names, scripts = []) {
+    const S = settings.get();
+    if (!(S.enabled && S.sdOn && S.autoArt)) return;
+    const need = [...new Set((names || []).filter(Boolean))].filter(n =>
+        !S.artPrompts?.[n] && !_looksInFlight.has(n));
+    if (!need.length) return;
+    need.forEach(n => _looksInFlight.add(n));
+    generateLooks(need).then((r) => {
+        need.forEach(n => _looksInFlight.delete(n));
+        if (!r || !r.ok) return;
+        const cur = settings.get();
+        if (cur.artCache && cur.artCache.char) {
+            for (const n of need) if (cur.artPrompts?.[n]) delete cur.artCache.char[n];
+        }
+        // 外观标签是异步拿到的：补完后让当前几幕重新走一次预生成。
+        for (const s of scripts) {
+            try { art.prefetch(s); } catch (e) { /* 失败不影响演出 */ }
+        }
+        console.log('[VN-Lite] 已自动补齐外观：', need.join('、'));
+    }).catch((e) => {
+        need.forEach(n => _looksInFlight.delete(n));
+        console.warn('[VN-Lite] 自动补外观失败', e);
+    });
+}
+
+// 从剧本里收集需要立绘的角色名
+function scriptCharNames(script) {
+    const out = [];
+    for (const seg of script?.segments || []) {
+        if ((seg.t === 'say' || seg.t === 'inner') && seg.who) out.push(seg.who);
+        if (seg.t === 'dir' && seg.char?.name) out.push(seg.char.name);
+    }
+    return out;
 }
 
 // ---------- 发送玩家选择 ----------
@@ -214,6 +256,7 @@ function appendLatestToTheater() {
     if (!script || !script.usable) return false;
     absorbLooks(script);
     const added = appendTheater(script, name2 || '演出');
+    ensureLooks(scriptCharNames(script), [script]);
     try { art.prefetch(script); } catch (e) { /* 预生成失败不影响演出 */ }
     return !!added;
 }
@@ -248,6 +291,9 @@ function buildTheaterItems() {
         const script = parseMessage(chat[recent[k]].mes, getCtxInfo({ autoChoice: last && !!S.autoChoice }));
         if (script && script.usable) { absorbLooks(script); items.push({ script, title: name2 || '演出' }); }
     }
+    const names = [];
+    for (const it of items) names.push(...scriptCharNames(it.script));
+    ensureLooks(names, items.map(it => it.script));
     return items;
 }
 

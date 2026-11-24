@@ -328,6 +328,11 @@ export function prefetch(script) {
         if (seen.has('char' + name)) return;
         seen.add('char' + name);
         if (peek('char', name)) return;
+        // 没有外观标签就别画：模型不知道这是谁，只会随机编一个人出来。
+        // 真机上「白发男主画成粉发少女」就是这么来的。
+        // 这时先让舞台用角色卡头像/剪影顶着，等 index.js 把外观标签
+        // 生成好（或用户手填）再重画。
+        if (!(S.artPrompts && S.artPrompts[name])) return;
         if (ensure('char', name, charPrompt(name), {
             negative: charNeg(name),
             size: SIZE.char,

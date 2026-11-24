@@ -100,10 +100,9 @@ function extractBlocks(raw) {
     // <bbs_*> 状态栏模板：时间地点保留成一行提示，其余（变量/物品栏）丢掉
     s = s.replace(/<bbs_items[^>]*>[\s\S]*?<\/bbs_items>/gi, '');
     s = s.replace(/<bbs_vars[^>]*>[\s\S]*?<\/bbs_vars>/gi, '');
-    s = s.replace(/<bbs_start[^>]*>([\s\S]*?)<\/bbs_start>/gi, (m, inner) => {
-        const t = plain(inner);
-        return t ? keep({ t: 'narr', text: t, stamp: true }) : '';
-    });
+    // bbs_start 里是「日期·时辰」这类模板时间戳，不是剧情正文。
+    // 留着会在第一屏播报「玄历……午时一刻」，看起来像有人在念系统提示。
+    s = s.replace(/<bbs_start[^>]*>[\s\S]*?<\/bbs_start>/gi, '');
     s = s.replace(/<bbs_end[^>]*>[\s\S]*?<\/bbs_end>/gi, '');
 
     // 纯容器：只脱壳，正文保留
@@ -212,8 +211,17 @@ function isNameLike(s) {
     return true;
 }
 
+// 名字后面紧跟这些字，说明它是动作/说话的主语，而不是被提到的宾语。
+// 「谢知微挑眉扫了姜伯珩一眼」里，说话的是谢知微，不是姜伯珩。
+const SPEECH_HINT = /(?:说|道|问|答|喊|叫|笑道|冷笑|挑眉|瞥|扫|冲|朝|对|向|摆手|抬手|伸手|拉住|拽住|抓住|摸出|递过|接过|点头|摇头|皱眉|哼|嘟囔|低声|声音|语气|的声|的语|却|便|就|一|把|将|在|看着|望着|听|面向|转过|走|站|坐)/;
+
+function scoreNameAt(text, n, idx) {
+    const tail = text.slice(idx + n.length, idx + n.length + 10);
+    return idx + (SPEECH_HINT.test(tail) ? 0 : 18);
+}
+
 // 从「引号前的文本」里推断说话人
-// 1) 文本里出现已知名字 → 取最靠右（最接近引号）的那个
+// 1) 已知名字优先：取「名字后面像主语」的那个；不再无脑取最靠右
 // 2) 否则取第一个短句，看它像不像人名
 function pickSpeaker(pre, knownNames) {
     let text = String(pre || '')
@@ -222,13 +230,20 @@ function pickSpeaker(pre, knownNames) {
         .trim();
     if (!text) return null;
 
-    // 1) 已知名字优先（包含匹配，取最靠右、最长的）
+    // 1) 已知名字优先。原先取最靠右的名字，遇到
+    // 「谢知微挑眉扫了姜伯珩一眼…「姜师弟…」」会把台词挂在姜伯珩名下。
+    // 现在给紧跟动作词的名字更低分，优先取真正的主语。
     let best = null;
     for (const n of namePool(knownNames)) {
         if (n.length < 2) continue;
-        const idx = text.lastIndexOf(n);
-        if (idx < 0) continue;
-        if (!best || idx > best.idx || (idx === best.idx && n.length > best.n.length)) best = { n, idx };
+        let from = 0, idx;
+        while ((idx = text.indexOf(n, from)) >= 0) {
+            const score = scoreNameAt(text, n, idx);
+            if (!best || score < best.score || (score === best.score && n.length > best.n.length)) {
+                best = { n, score };
+            }
+            from = idx + n.length;
+        }
     }
     if (best) return best.n;
 
@@ -338,6 +353,7 @@ function parseProtocol(text, knownNames) {
     // 顺序不能反：cleanText 会把所有 <...> 抹平，抹完就分不清选项和旁白。
     const { text: body, blocks } = extractBlocks(stripNoise(text));
     let lastChar = null; // [char:] 标签的最近角色，用于无名对白归属
+    let lastNarrSpeaker = null; // 最近一段「某人做某事」叙述里的主语
 
     const emit = (seg) => {
         // 模板常把同一个时间戳写两遍（<bbs_start> 出现两次），去掉重复的那条
@@ -346,7 +362,7 @@ function parseProtocol(text, knownNames) {
         script.segments.push(seg);
     };
 
-    const feedLine = (raw) => {
+    const feedLine = (raw, nextLines = []) => {
         let line = raw.trim();
         if (!line) return;
         // 剥离行首连续标签（如 [char:xx][bgm:yy] 正文）
@@ -424,18 +440,43 @@ function parseProtocol(text, knownNames) {
             }
         }
         if (!line.trim()) return;
-        pushSpeech(script, line.trim(), knownNames, lastChar);
+        const hasQuote = /[「『“"]/.test(line);
+        if (!hasQuote) {
+            const ns = narrSpeaker(line, knownNames);
+            if (ns) lastNarrSpeaker = ns;
+        }
+        let fallback = lastNarrSpeaker || lastChar;
+        // 对白独占一行、说话人写在后面叙述里时，向后看几行：
+        // 「聚宝阁……」→「姜伯珩神色平平淡淡的……」
+        // 「哥。」→「里屋……姜伯瑾慢吞吞地走了出来。」
+        // 遇到下一段独占一行的对白就停：那是另一个人的台词，别把它的主语偷过来。
+        if (/^[「『“"]/.test(line) && !pickSpeakerAfter(line, knownNames)) {
+            for (const nx of nextLines) {
+                if (/^[「『“][^」』”]{1,120}[」』”]\s*$/.test(nx.trim())) break;
+                const w = narrSpeaker(nx, knownNames);
+                if (w) { fallback = w; break; }
+            }
+        }
+        pushSpeech(script, line.trim(), knownNames, fallback);
     };
 
     // 按占位符切段：正文 / 块 / 正文 / 块…，原位插回，阅读顺序不乱
     const parts = body.split(BLOCK_RE);
+    const items = [];
     for (let i = 0; i < parts.length; i++) {
         if (i % 2 === 1) {
             const b = blocks[Number(parts[i])];
-            if (b) emit(b);
+            if (b) items.push({ block: b });
             continue;
         }
-        for (const raw of cleanText(parts[i]).split(/\n+/)) feedLine(raw);
+        for (const raw of cleanText(parts[i]).split(/\n+/)) {
+            if (raw.trim()) items.push({ line: raw.trim() });
+        }
+    }
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].block) { emit(items[i].block); continue; }
+        feedLine(items[i].line, items.slice(i + 1, i + 5)
+            .filter(x => x.line).map(x => x.line));
     }
     // 起始 scene/bgm 取第一个 dir 的值（舞台初始状态）
     script.scene = (script.segments.find(s => s.t === 'dir' && s.scene) || {}).scene || null;
@@ -478,6 +519,50 @@ function cleanNarr(s) {
         .trim();
 }
 
+// 从引号后面的动作描写反推说话人：
+// 「行了，李师弟…」谢知微挑眉扫了姜伯珩一眼…
+// 「不用谢我…」谢知微冲他摆了摆手…
+// 「师兄，是我。」→ 下一行「言逸清润温和的声音隔着门板传进来」
+function pickSpeakerAfter(after, knownNames) {
+    const raw = String(after || '').trim();
+    if (!raw) return null;
+    const cut = raw.search(/[「『“"]/);
+    const seg = (cut >= 0 ? raw.slice(0, cut) : raw).slice(0, 48);
+    let best = null;
+    for (const n of namePool(knownNames)) {
+        if (n.length < 2) continue;
+        let from = 0, idx;
+        while ((idx = seg.indexOf(n, from)) >= 0) {
+            const tail = seg.slice(idx + n.length, idx + n.length + 10);
+            if (SPEECH_HINT.test(tail) || /^[，,、；;]/.test(tail) || /^的/.test(tail)) {
+                const score = idx - (SPEECH_HINT.test(tail) ? 6 : 0);
+                if (!best || score < best.score) best = { n, score };
+                break;
+            }
+            from = idx + n.length;
+        }
+    }
+    return best ? best.n : null;
+}
+
+// 一句话里没有引号时，看看它像不像「某人做了某事」的叙述，
+// 记下来给前后无主的对白兜底用。
+function narrSpeaker(line, knownNames) {
+    // 只取第一组引号之前的叙述部分：
+    // 「言逸清润温和的声音……，「下午我去……」」里，主语在引号前。
+    const t = String(line || '').trim().split(/[「『“]/)[0].trim();
+    if (!t) return null;
+    let best = null;
+    for (const n of namePool(knownNames)) {
+        if (n.length < 2) continue;
+        const idx = t.indexOf(n);
+        if (idx < 0 || idx > 24) continue;
+        const score = idx + (SPEECH_HINT.test(t.slice(idx + n.length, idx + n.length + 10)) ? 0 : 18);
+        if (!best || score < best.score) best = { n, score };
+    }
+    return best ? best.n : null;
+}
+
 // 一行文本 → 若干 say/narr 段（支持一行里多组引号）
 function pushSpeech(script, line, knownNames, fallbackSpeaker) {
     const re = new RegExp(QUOTE_RE.source, 'g');
@@ -495,15 +580,18 @@ function pushSpeech(script, line, knownNames, fallbackSpeaker) {
             return;
         }
         any = true;
-        let who = null;
-        if (before) {
+        // 先看引号后面的动作描写：它比「引号前出现了谁」更可靠。
+        // 例：「不用谢我……」谢知微冲他摆了摆手 —— 说话人是谢知微。
+        const afterWho = pickSpeakerAfter(after, knownNames);
+        let who = afterWho || null;
+        if (!who && before) {
             who = pickSpeaker(before, knownNames);
             if (who) learnNames([who]);
             else {
                 const narr = cleanNarr(before);
                 if (narr) script.segments.push({ t: 'narr', text: narr });
             }
-        } else if (fallbackSpeaker) {
+        } else if (!who && fallbackSpeaker) {
             who = fallbackSpeaker;
         }
         if (quote) script.segments.push({ t: 'say', who, text: quote });
@@ -535,7 +623,9 @@ function parseSmart(text, knownNames) {
     lines = tail.rest;
 
     let lastSpeaker = null;
-    for (const line of lines) {
+    let lastNarrSpeaker = null;
+    for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
         // "名字：对白" 无引号格式（仅已知角色名）
         const colon = line.match(/^([^\s:：，。！？]{1,10})\s*[：:]\s*(.+)$/);
         if (colon && namePool(knownNames).includes(colon[1])) {
@@ -543,8 +633,22 @@ function parseSmart(text, knownNames) {
             script.segments.push({ t: 'say', who: colon[1], text: colon[2].trim() });
             continue;
         }
+        const hasQuote = /[「『“"]/.test(line);
+        if (!hasQuote) {
+            const ns = narrSpeaker(line, knownNames);
+            if (ns) lastNarrSpeaker = ns;
+        }
+        // 一些段落把整句对白单独成行，说话人写在下一行的叙述里：
+        // 「伯瑾？」→「里屋…姜伯瑾慢吞吞地走了出来。」
+        let lookahead = null;
+        if (hasQuote && !pickSpeakerAfter(line, knownNames) && !pickSpeaker(
+            line.slice(0, Math.max(0, line.search(/[「『“"]/))), knownNames)) {
+            for (let j = li + 1; j < Math.min(lines.length, li + 3) && !lookahead; j++) {
+                lookahead = narrSpeaker(lines[j], knownNames);
+            }
+        }
         const before = script.segments.length;
-        pushSpeech(script, line, knownNames, lastSpeaker);
+        pushSpeech(script, line, knownNames, lookahead || lastNarrSpeaker || lastSpeaker);
         for (let i = before; i < script.segments.length; i++) {
             const s = script.segments[i];
             if (s.t === 'say' && s.who) lastSpeaker = s.who;

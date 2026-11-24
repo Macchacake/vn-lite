@@ -185,7 +185,10 @@ function createStage(script, env) {
         });
         maybeChroma(img, r.src, r.alpha);
         // 既没有手动映射也没有 AI 图 → 现场排一张（预生成没覆盖到的角色兜底）
-        if (!r.gen && !(env.resolveChar && env.resolveChar(name)) && S.sdOn && S.autoArt) {
+        // 没有外观标签时绝不现场画：模型只会随机编一个人（男主画成少女就是这么来的）。
+        // 等 index.js 异步补好标签后会清缓存并重新预生成。
+        if (!r.gen && !(env.resolveChar && env.resolveChar(name)) && S.sdOn && S.autoArt
+            && S.artPrompts && S.artPrompts[name]) {
             ensureArt('char', name, charPrompt(name), {
                 negative: charNeg(name),
                 size: SIZE.char,

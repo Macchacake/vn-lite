@@ -77,6 +77,32 @@ function init(extSettings, saveFn, hooks = {}) {
 function get() { return S; }
 function save() { try { _save && _save(); } catch (e) { console.warn('[VN-Lite] 保存设置失败', e); } }
 
+// 换 ComfyUI 地址（尤其是公网快速隧道重启换域名）后，
+// 把缓存和图集里的旧 base 换成新地址。图片文件还在同一台 ComfyUI 上，
+// 不换的话舞台/图集会全部变成裂图（实测手机图集 8 张有 5 张空白）。
+function rebaseArtUrls(raw) {
+    const b = String(raw || '').trim().replace(/\/+$/, '');
+    if (!b || !S) return;
+    const isTunnel = (u) => /trycloudflare\.com/i.test(u || '');
+    const origin = (u) => { try { return new URL(u).origin; } catch { return ''; } };
+    const canMove = (old) => {
+        if (!old || old === b) return false;
+        // 同为快速隧道域名，或同一个主机端口 → 指向的还是那台 ComfyUI
+        return (isTunnel(old) && isTunnel(b)) || origin(old) === origin(b);
+    };
+    let changed = false;
+    const move = (rec) => {
+        if (rec && canMove(rec.base)) { rec.base = b; changed = true; }
+    };
+    for (const kind of ['bg', 'char', 'item', 'cg']) {
+        const bucket = S.artCache && S.artCache[kind];
+        if (!bucket) continue;
+        for (const k of Object.keys(bucket)) move(bucket[k]);
+    }
+    for (const g of (S.gallery || [])) move(g);
+    if (changed) save();
+}
+
 function applyFont() {
     if (!S) return;
     document.documentElement.style.setProperty('--vnl-fs', S.fontSize + 'px');
@@ -253,6 +279,7 @@ function bindPanel(wrap, hooks) {
             const b = String(raw || '').trim();
             if (!b) return;
             S.sdUrl = b;
+            rebaseArtUrls(b);
             S.sdHistory = Array.isArray(S.sdHistory) ? S.sdHistory : [];
             if (!S.sdHistory.includes(b)) {
                 S.sdHistory.unshift(b);

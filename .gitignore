@@ -20,5 +20,7 @@ _h/
 /_*.py
 /_*.mjs
 /_*.txt
+/_*.json
+/_st_script.js
 /_chk/
 /_t/
