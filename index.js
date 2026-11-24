@@ -140,7 +140,11 @@ ${desc || '（这张卡没有写外观，请按名字给一个合理的日系角
             out = String(out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
             out = out.replace(/^["'`]+|["'`]+$/g, '').replace(/^(tags?|标签)[:：]\s*/i, '').trim();
             if (!out) continue;
-            if (!/^1(boy|girl|other)\b/i.test(out)) out = '1girl, ' + out;
+            // 这里绝对不要补默认性别。
+            // 旧代码写的是「没有 1boy/1girl 就补 1girl」，结果卡里没写清外观的
+            // 男角色（比如 183cm 的男生）被硬生生画成了粉发少女 —— 立绘性别错、
+            // 整张图跟剧情对不上，就是这一行造成的。
+            // 性别只由角色卡和 AI 给的标签决定，插件不猜。
             S.artPrompts[c.name] = out;
             S.lookAuto[c.name] = true;
             if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];

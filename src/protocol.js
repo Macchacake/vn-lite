@@ -41,7 +41,9 @@ export const DEFAULT_PROTOCOL =
 16. 玩家行动失败时也要让剧情往前走（受伤、被发现、代价、转折），不要把玩家卡在原地
 17. 保持角色自己的口吻与立场，NPC 可以有情绪、可以拒绝玩家，不要一味顺从
 18. 角色的外观始终以 [look:] 里写的那套标签为准，不要中途改发色、瞳色、服装风格
-19. 不要写「你想怎么做？」这类空话，用 [choice:] 或 [input:] 代替`;
+19. 不要写「你想怎么做？」这类空话，用 [choice:] 或 [input:] 代替
+20. 不要用 <think>、<bbs>、<game>、<options>、<details>、<comment>、<background> 这类自定义标签把内容包起来；内心独白直接写成叙述即可，不要加包装。这些标签要么会被当成正文念出来，要么会整段消失
+21. [look:] 是必须项，不是可选项。少了它，这个角色就没有任何外观信息，生成出来的立绘会是个完全无关的陌生人`;
 
 export function buildProtocol(S) {
     const custom = S && typeof S.protocol === 'string' ? S.protocol.trim() : '';

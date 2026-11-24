@@ -132,7 +132,28 @@ const SCENE_DEFS = {
         art: G('g', '#e8934a', '#8a4a52',
             '<circle cx="225" cy="420" r="90" fill="#ffe3a0" opacity="0.95"/><rect x="0" y="560" width="450" height="240" fill="#4a2f3a" opacity="0.85"/><g fill="#31202a" opacity="0.9"><rect x="40" y="440" width="70" height="120"/><rect x="330" y="460" width="60" height="100"/></g>'),
     },
+    // 古风 / 仙侠兜底。原本这类场景（某宗门东院、戒律堂、药堂…）
+    // 一个都对不上，全被塞进「室内」——仙侠剧画成现代小屋。
+    '古风': {
+        kw: ['宗门', '山门', '外门', '内门', '长老', '师兄', '师姐', '宗主', '弟子', '灵石', '灵力',
+            '丹药', '符', '阵法', '仙', '修', '殿', '阁', '堂', '院', '檐', '廊', '榻', '烛',
+            '戒律', '刑', '药堂', '卷宗', '剑', '客栈', '坊市', '玄', '灵', '师门', '禁地'],
+        art: G('g', '#3c4a63', '#1b2233',
+            // 远山 + 云海
+            '<path d="M0,430 L90,300 L150,360 L230,250 L310,350 L380,290 L450,380 L450,470 L0,470 Z" fill="#26314a" opacity="0.9"/>' +
+            '<path d="M0,470 L120,390 L210,440 L300,370 L450,450 L450,520 L0,520 Z" fill="#1d2740" opacity="0.85"/>' +
+            // 飞檐
+            '<g fill="#141a28"><path d="M40,520 L60,455 L200,430 L210,470 L190,520 Z"/><path d="M250,520 L275,440 L430,420 L450,470 L440,520 Z"/></g>' +
+            '<g stroke="#6f86b5" stroke-opacity="0.5" stroke-width="3" fill="none"><path d="M20,520 q40,-14 200,-18 q160,4 210,18"/></g>' +
+            // 灯笼
+            '<g fill="#e8a35a" opacity="0.85"><circle cx="120" cy="470" r="9"/><circle cx="330" cy="455" r="9"/></g>' +
+            // 地面石板
+            '<rect x="0" y="640" width="450" height="160" fill="#161c2b" opacity="0.92"/>'),
+    },
 };
+
+// 这个场景名看起来像不像古风 / 仙侠（没有 SD 时用它挑兜底背景）
+const ANCIENT_RE = /(宗|门|殿|阁|堂|院|寺|观|庙|府|楼|斋|轩|居|山|峰|崖|谷|洞|竹林|仙|修|灵|丹|符|阵|戒律|刑|药|卷宗|剑|客栈|坊市|玄|禁地|长老|师兄|师姐|弟子)/;
 
 // 天气特效映射（CSS 类名）
 function weatherOf(scene) {
@@ -145,7 +166,8 @@ function weatherOf(scene) {
 // 场景 → 背景 URI（带缓存）
 const _bgCache = new Map();
 function sceneBG(scene) {
-    const cat = SCENE_DEFS[scene] ? scene : '室内';
+    let cat = SCENE_DEFS[scene] ? scene : null;
+    if (!cat) cat = ANCIENT_RE.test(String(scene || '')) ? '古风' : '室内';
     if (_bgCache.has(cat)) return _bgCache.get(cat);
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 800" preserveAspectRatio="xMidYMid slice">${SCENE_DEFS[cat].art}</svg>`;
     const uri = svgURI(svg);

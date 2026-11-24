@@ -264,6 +264,21 @@ function createStage(script, env) {
             setActive(null);
             textEl.className = 'vnl-text vnl-narr';
             typeOut(seg.text, instant);
+        } else if (seg.t === 'inner') {
+            // <details><summary>内心-某某</summary>… 这类心声：和旁白区分开，
+            // 否则读者分不清「他说了什么」和「他心里想了什么」。
+            if (seg.who) {
+                addSprite(seg.who);
+                setActive(seg.who);
+                nameEl.style.display = '';
+                nameEl.textContent = seg.who + ' · 心声';
+                nameEl.classList.remove('vnl-user');
+            } else {
+                nameEl.style.display = 'none';
+                setActive(null);
+            }
+            textEl.className = 'vnl-text vnl-inner';
+            typeOut(seg.text, instant);
         } else if (seg.t === 'choice') {
             nameEl.style.display = 'none';
             textEl.className = 'vnl-text vnl-narr';

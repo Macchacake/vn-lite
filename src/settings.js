@@ -398,9 +398,10 @@ function bindPromptList(wrap, hooks) {
         const row = document.createElement('div');
         row.className = 'vnl-prompt-row';
         const isAuto = S.lookAuto && S.lookAuto[c.name] === true;
+        const badge = isAuto ? 'AI 生成' : (S.artPrompts[c.name] ? '手动' : '未设置 · 立绘会是随机角色');
         row.innerHTML = `<div class="vnl-prompt-head">
                 <span class="vnl-prompt-name">${escAttr(c.name)}</span>
-                <span class="vnl-prompt-badge">${isAuto ? 'AI 生成' : (S.artPrompts[c.name] ? '手动' : '未设置')}</span>
+                <span class="vnl-prompt-badge">${badge}</span>
             </div>
             <input class="vnl-prompt-input" type="text" value="${escAttr(S.artPrompts[c.name] || '')}"
                 placeholder="1boy, black hair, red eyes, white coat, tall">`;

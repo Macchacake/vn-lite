@@ -133,8 +133,40 @@ const SCENE_PROMPT = {
     '黄昏': 'sunset, warm orange sky, long shadows, silhouettes',
 };
 
+// 中文场景词 → 英文背景标签。
+// 踩过的坑：角色卡写的是 [scene:某宗门·外门东院] 这种中文专有名词，
+// 而 SCENE_PROMPT 只有「教室 / 街道 / 咖啡馆」这些现代场景，
+// 查不到就退化成 "anime background art, detailed scenery"，
+// 于是仙侠屋里画出了欧式石砌教堂 + 齿轮，和剧情完全对不上。
+const SCENE_KW_EN = [
+    [/(戒律|刑堂|刑坪|牢|狱|石室|执法|禁地)/, 'ancient chinese stone hall, cold stone walls, iron chains, dim torchlight, ominous atmosphere, xianxia'],
+    [/(药堂|药房|丹房|药庐|药炉|炼丹|百草)/, 'ancient chinese herbal medicine hall, wooden shelves, porcelain jars, incense smoke, warm lantern light, xianxia'],
+    [/(卷宗|书阁|藏书|剑阁|藏经|书房|典籍|宗阁)/, 'ancient chinese library, tall wooden shelves, scrolls, paper lanterns, dust motes in light beams, xianxia'],
+    [/(庭院|院子|院|回廊|廊|檐|厢房)/, 'ancient chinese courtyard, wooden veranda, stone paving, bamboo, paper lanterns, xianxia'],
+    [/(屋|房|室内|密室|主宅|宅|室|榻|床|卧|寝室|内室)/, 'ancient chinese room interior, wooden lattice window, low table, canopy bed, dim candlelight, xianxia'],
+    [/(竹林|竹)/, 'bamboo forest, tall green bamboo, dappled sunlight, mist, xianxia'],
+    [/(山|峰|崖|谷|岭|云海|主峰)/, 'mountain landscape, rocky peaks, sea of clouds, pine trees, chinese ink wash mood, xianxia'],
+    [/(湖|河|溪|潭|池|渡口|水)/, 'calm water, river bank, reeds, soft mist, reflection, xianxia'],
+    [/(街|坊市|集市|酒馆|客栈|茶楼|摊)/, 'ancient chinese street, wooden shopfronts, hanging banners, red lanterns, xianxia'],
+    [/(宗|殿|阁|堂|门|寺|观|庙|府|楼|斋|轩|居)/, 'ancient chinese architecture, temple hall, tiled curved roofs, red pillars, stone steps, xianxia'],
+    [/(夜|月|星)/, 'night, moonlight, dark blue tones'],
+    [/(雪|冬|寒)/, 'snow, falling snow, pale cold light'],
+    [/(雨|阴|雾)/, 'rain, wet stone, grey misty light'],
+    [/(血|战|杀|伤|鞭|尸)/, 'dark atmosphere, dust and smoke, dramatic rim light'],
+];
+
 export function scenePrompt(cat) {
-    const base = SCENE_PROMPT[cat] || 'anime background art, detailed scenery';
+    const key = String(cat || '').trim();
+    let base = SCENE_PROMPT[key];
+    if (!base) {
+        // 没命中预设表：按中文关键词拼英文标签（最多 3 组，避免提示词打架）
+        const tags = [];
+        for (const [re, en] of SCENE_KW_EN) {
+            if (re.test(key) && !tags.includes(en)) tags.push(en);
+            if (tags.length >= 3) break;
+        }
+        base = tags.length ? tags.join(', ') : 'anime background art, detailed scenery';
+    }
     return joinTags([base, 'no people, anime background, highly detailed', styleOf(S).tail]);
 }
 

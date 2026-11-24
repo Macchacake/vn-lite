@@ -160,6 +160,15 @@
     color: #b9c2d4;
     font-style: italic;
 }
+/* 心声：比旁白更淡、带一道左侧竖线，和「说出口的对白」区分开 */
+.vnl-text.vnl-inner {
+    color: #9fb0cc;
+    font-style: italic;
+    opacity: 0.95;
+    border-left: 2px solid rgba(159, 176, 204, 0.45);
+    padding-left: 10px;
+    margin-left: 2px;
+}
 .vnl-cur {
     display: inline-block;
     width: 2px;

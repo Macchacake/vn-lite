@@ -9,19 +9,108 @@ import { guessScene } from './assets.js';
 
 // ---------- 公共工具 ----------
 
-// 剥离思维链 / 推理 / OOC 等杂项（在 markdown 清理之前）
+// 噪声标签的「词根」。允许带后缀（<think_nya> / <reasoning_v2> 这类），
+// 因为不少预设会给思考标签加后缀，写死闭合标签就会整段漏进正文。
+// 注意：不要把 summary 放进来。它是 <details> 的标题（「内心-某角色」），
+// 属于结构标签不是噪声块；当成噪声剥掉的话，心声就分不清是谁的了。
+const NOISE_ROOTS = 'think|thinking|reasoning|thought|thoughts|analyze|analysis|reflection|brainstorm|scratchpad|inner_?monologue|comment|comments|note|notes|meta|plan|planning|outline|draft';
+
+// 剥离思维链 / 推理 / 作者备注 / OOC 等杂项（在 markdown 清理之前）
 function stripNoise(s) {
-    // 成对的思考标签：<thinking>...</thinking> 等（常见于 DeepSeek-R1 / 各类推理模型）
-    s = s.replace(/<(think|thinking|reasoning|thought|thoughts|analyze|analysis|reflection|brainstorm|scratchpad|inner_?monologue|summary)[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
-    // 未闭合的思考标签：从开标签起整段丢弃（模型忘关标签时防止吞掉正文判断）
-    if (/<(think|thinking|reasoning)>/i.test(s) && !/<\/(think|thinking|reasoning)>/i.test(s)) {
-        s = s.replace(/<(?:think|thinking|reasoning)>[\s\S]*$/i, '');
+    // 成对噪声块：开闭标签都吃后缀。
+    // 实测踩过的坑：旧正则开标签用 [^>]* 能匹配 <think_nya>，但闭合标签
+    // 写死成 </\1>，于是 <think_nya>…</think_nya> 整块没被剥掉，
+    // 只剩 <...> 被 cleanText 抹掉，AI 的推理全文（上千字、几十屏）
+    // 就被当成旁白一段段播出去了。
+    const pair = new RegExp(
+        `<(${NOISE_ROOTS})[A-Za-z0-9_\\-]*[^>]*>[\\s\\S]*?<\\/\\1[A-Za-z0-9_\\-]*\\s*>`, 'gi');
+    // 可能嵌套（<comment> 里套 <think>），反复剥到不再变化
+    for (let i = 0, prev = null; i < 8 && s !== prev; i++) { prev = s; s = s.replace(pair, ''); }
+
+    // 未闭合的噪声块：从开标签起整段丢弃，避免吞掉正文
+    const openRe = new RegExp(`<(${NOISE_ROOTS})[A-Za-z0-9_\\-]*[^>]*>`, 'i');
+    const closeRe = new RegExp(`<\\/(${NOISE_ROOTS})[A-Za-z0-9_\\-]*\\s*>`, 'i');
+    let guard = 0;
+    while (guard++ < 8) {
+        const om = openRe.exec(s);
+        if (!om) break;
+        const after = s.slice(om.index + om[0].length);
+        if (closeRe.test(after)) break;          // 还有闭合标签 → 交给下一轮成对剥离
+        s = s.slice(0, om.index);                // 真的没关 → 后面全是推理，丢掉
     }
+
     // 首行 Reasoning: / Thinking: 段落
     s = s.replace(/^\s*(?:Reasoning|Thinking|Thought|reasoning|thinking)[:：][^\n]*$/gm, '');
     // OOC 备注 ((...))
     s = s.replace(/\(\([\s\S]*?\)\)/g, '');
     return s;
+}
+
+// ---------- 第三方模板块提取 ----------
+// 很多角色卡自带一套输出模板（<game> / <options> / <details> / <bbs_*>）。
+// 这些块必须在 cleanText 之前处理：cleanText 会把所有 <...> 抹平，
+// 抹完就分不清哪段是选项、哪段是内心独白，全部变成旁白念一遍
+// （实测三个选项被当成正文念了出来，结尾又冒出一个通用选项）。
+// 做法：把块换成占位符，正文照旧走行解析，最后按占位符原位插回，顺序不乱。
+const BLOCK_MARK = '\u0001B';
+const BLOCK_RE = /\u0001B(\d+)\u0001/g;
+
+function extractBlocks(raw) {
+    const blocks = [];
+    const keep = (seg) => { blocks.push(seg); return `${BLOCK_MARK}${blocks.length - 1}\u0001`; };
+    const plain = (s) => String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+        // 块内文本同样要修边：跨块的引号会在块尾留下孤零零的 ”，
+        // 之前它单独成了一屏旁白。
+        .replace(/^[，,。、；;：:\s“”「」『』"'‘’]+/, '')
+        .replace(/[：:，,、；;\s“”「」『』"'‘’]+$/, '')
+        .trim();
+    let s = String(raw || '');
+
+    // <options><option>…</option></options> → 可点选项
+    s = s.replace(/<options[^>]*>([\s\S]*?)<\/options>/gi, (m, inner) => {
+        let opts = [...inner.matchAll(/<option[^>]*>([\s\S]*?)<\/option>/gi)].map(x => plain(x[1])).filter(Boolean);
+        if (!opts.length) {
+            opts = inner.split(/\n+/).map(x => plain(x.replace(/^[\s\-*•·\d.、)）]+/, ''))).filter(Boolean);
+        }
+        opts = opts.map(x => x.replace(/^[\s\-*•·]+/, '').trim()).filter(Boolean).slice(0, 4);
+        return opts.length ? keep({ t: 'choice', opts }) : '';
+    });
+    // 落单的 <option>
+    s = s.replace(/<option[^>]*>([\s\S]*?)<\/option>/gi, (m, inner) => {
+        const t = plain(inner);
+        return t ? keep({ t: 'narr', text: t }) : '';
+    });
+
+    // <details><summary>内心-某某</summary>…</details> → 心声段（和旁白区分开）
+    s = s.replace(/<details[^>]*>([\s\S]*?)<\/details>/gi, (m, inner) => {
+        const sm = inner.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
+        const label = sm ? plain(sm[1]) : '';
+        const body = plain(inner.replace(/<summary[^>]*>[\s\S]*?<\/summary>/i, ''));
+        if (!body) return '';
+        const who = label.replace(/^[\s【\[]*(?:内心|心声|心理|想法|独白)[-—－:：\s]*/, '').replace(/[\s】\]]+$/, '').trim();
+        return keep({ t: 'inner', who: who || null, text: body });
+    });
+
+    // <background>…</background> → 幕间旁白（别的角色同时在做什么）
+    s = s.replace(/<background[^>]*>([\s\S]*?)<\/background>/gi, (m, inner) => {
+        const t = plain(inner);
+        return t ? keep({ t: 'narr', text: t, interlude: true }) : '';
+    });
+
+    // <bbs_*> 状态栏模板：时间地点保留成一行提示，其余（变量/物品栏）丢掉
+    s = s.replace(/<bbs_items[^>]*>[\s\S]*?<\/bbs_items>/gi, '');
+    s = s.replace(/<bbs_vars[^>]*>[\s\S]*?<\/bbs_vars>/gi, '');
+    s = s.replace(/<bbs_start[^>]*>([\s\S]*?)<\/bbs_start>/gi, (m, inner) => {
+        const t = plain(inner);
+        return t ? keep({ t: 'narr', text: t, stamp: true }) : '';
+    });
+    s = s.replace(/<bbs_end[^>]*>[\s\S]*?<\/bbs_end>/gi, '');
+
+    // 纯容器：只脱壳，正文保留
+    s = s.replace(/<\/?(?:game|bbs|body|story|content|main|scene_box)[^>]*>/gi, '');
+    // 第三方占位符
+    s = s.replace(/<StatusPlaceHolder[A-Za-z0-9_]*[^>]*\/?>/gi, '');
+    return { text: s, blocks };
 }
 
 // 清理 markdown 噪声，保留可读文本
@@ -174,14 +263,51 @@ function expandLongSegments(script, max) {
     if (!max || max < 12) return script;
     const out = [];
     for (const seg of script.segments) {
-        if ((seg.t === 'narr' || seg.t === 'say') && seg.text && seg.text.length > max) {
+        if ((seg.t === 'narr' || seg.t === 'say' || seg.t === 'inner') && seg.text && seg.text.length > max) {
             for (const piece of splitText(seg.text, max)) {
-                out.push(seg.t === 'say' ? { t: 'say', who: seg.who, text: piece } : { t: 'narr', text: piece });
+                out.push(seg.t === 'narr'
+                    ? Object.assign({}, seg, { text: piece })
+                    : Object.assign({}, seg, { text: piece }));
             }
         } else {
             out.push(seg);
         }
     }
+    script.segments = out;
+    return script;
+}
+
+// 碎句合并：引号切分会在正文里留下「和」「残印。」这种 1~4 字的残渣，
+// 每一条都要单独占一屏、单独点一次「继续」，手机上极其难受。
+// 规则：连续旁白里，短于 min 的片段并进上一条；没有上一条就并入下一条。
+function mergeTiny(script, min = 6) {
+    const segs = script.segments;
+    const out = [];
+    let carry = null;   // 等待并入下一条的残渣
+    for (const seg of segs) {
+        const tiny = (seg.t === 'narr') && seg.text && seg.text.length < min;
+        if (tiny) {
+            const prev = out[out.length - 1];
+            if (prev && prev.t === 'narr' && !prev.stamp) {
+                prev.text = prev.text + seg.text;      // 直接接上，不加分隔符
+                continue;
+            }
+            carry = carry ? carry + seg.text : seg.text;
+            continue;
+        }
+        if (carry) {
+            if (seg.t === 'narr') {
+                seg.text = carry + seg.text;
+            } else if (seg.t === 'say') {
+                out.push({ t: 'narr', text: carry });
+            } else {
+                out.push({ t: 'narr', text: carry });
+            }
+            carry = null;
+        }
+        out.push(seg);
+    }
+    if (carry) out.push({ t: 'narr', text: carry });
     script.segments = out;
     return script;
 }
@@ -197,11 +323,21 @@ const QUEST_ST = { '开始': 'start', '新': 'start', 'new': 'start', '接受': 
 
 function parseProtocol(text, knownNames) {
     const script = { mode: 'protocol', scene: null, bgm: null, segments: [] };
-    const lines = cleanText(text).split(/\n+/);
+    // 先剥噪声、再抽第三方块，最后才逐行解析正文。
+    // 顺序不能反：cleanText 会把所有 <...> 抹平，抹完就分不清选项和旁白。
+    const { text: body, blocks } = extractBlocks(stripNoise(text));
     let lastChar = null; // [char:] 标签的最近角色，用于无名对白归属
-    for (let raw of lines) {
+
+    const emit = (seg) => {
+        // 模板常把同一个时间戳写两遍（<bbs_start> 出现两次），去掉重复的那条
+        const prev = script.segments[script.segments.length - 1];
+        if (prev && seg.stamp && prev.stamp && prev.text === seg.text) return;
+        script.segments.push(seg);
+    };
+
+    const feedLine = (raw) => {
         let line = raw.trim();
-        if (!line) continue;
+        if (!line) return;
         // 剥离行首连续标签（如 [char:xx][bgm:yy] 正文）
         let guard = 0;
         while (guard++ < 6) {
@@ -276,8 +412,19 @@ function parseProtocol(text, knownNames) {
                 if (val) script.segments.push({ t: 'input', hint: val });
             }
         }
-        if (!line.trim()) continue;
+        if (!line.trim()) return;
         pushSpeech(script, line.trim(), knownNames, lastChar);
+    };
+
+    // 按占位符切段：正文 / 块 / 正文 / 块…，原位插回，阅读顺序不乱
+    const parts = body.split(BLOCK_RE);
+    for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 1) {
+            const b = blocks[Number(parts[i])];
+            if (b) emit(b);
+            continue;
+        }
+        for (const raw of cleanText(parts[i]).split(/\n+/)) feedLine(raw);
     }
     // 起始 scene/bgm 取第一个 dir 的值（舞台初始状态）
     script.scene = (script.segments.find(s => s.t === 'dir' && s.scene) || {}).scene || null;
@@ -286,7 +433,10 @@ function parseProtocol(text, knownNames) {
 }
 
 function hasProtocolTag(text) {
-    return /[\[【]\s*(scene|char|look|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text);
+    return /[\[【]\s*(scene|char|look|bgm|choice|qte|cg|stats|item|quest|aff|dice|input)\s*[：:=]/i.test(text)
+        // 第三方模板（<game> / <options> / <bbs_*>）也算协议味：这类卡片
+        // 往往把 [scene:] 藏在 <game> 里，光看方括号标签容易漏判。
+        || /<(?:game|options|option|bbs_[a-z]+|details)\b[^>]*>/i.test(text);
 }
 
 // ---------- 智能解析（零配置） ----------
@@ -309,9 +459,11 @@ function guessMood(text) {
 }
 
 function cleanNarr(s) {
+    // 引号被跨行切断时会留下孤零零的 “ 或 ” 单独成屏（实测「”」占了一整屏）。
+    // 首尾的引号和标点一起剥掉。
     return String(s || '')
-        .replace(/^[，,。、；;：:\s]+/, '')
-        .replace(/[：:，,、；;\s]+$/, '')   // 去掉引号前残留的冒号
+        .replace(/^[，,。、；;：:\s“”「」『』"'‘’]+/, '')
+        .replace(/[：:，,、；;\s“”「」『』"'‘’]+$/, '')
         .trim();
 }
 
@@ -349,8 +501,13 @@ function pushSpeech(script, line, knownNames, fallbackSpeaker) {
 
 function parseSmart(text, knownNames) {
     const script = { mode: 'smart', scene: null, bgm: null, segments: [] };
-    const cleaned = cleanText(text);
-    if (!cleaned.trim()) return script;
+    // 智能模式也会遇到第三方模板（<options> / <details> / <background>），
+    // 先抽块再清文本，否则选项和内心独白会被当成正文念一遍。
+    const { text: rawBody, blocks } = extractBlocks(stripNoise(text));
+    const cleaned = cleanText(rawBody).replace(BLOCK_RE, '\n');
+    const blockChoice = blocks.find(b => b.t === 'choice') || null;
+    const blockRest = blocks.filter(b => b.t !== 'choice');
+    if (!cleaned.trim() && !blockRest.length) return script;
     script.scene = guessScene(cleaned);
     script.bgm = guessMood(cleaned);
     let lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
@@ -373,9 +530,13 @@ function parseSmart(text, knownNames) {
             if (s.t === 'say' && s.who) lastSpeaker = s.who;
         }
     }
-    // 结尾的选项列表 → 可点选项
+    // 幕间 / 心声等块补在正文之后
+    for (const b of blockRest) script.segments.push(b);
+    // 结尾的选项列表 → 可点选项；模板里的 <options> 优先
     if (tail.options.length >= 2) {
         script.segments.push({ t: 'choice', opts: tail.options.slice(0, 4) });
+    } else if (blockChoice) {
+        script.segments.push(blockChoice);
     }
     return script;
 }
@@ -432,11 +593,16 @@ function parseMessage(raw, ctxInfo = {}) {
     const knownNames = [ctxInfo.charName, ctxInfo.userName, ...(ctxInfo.members || [])]
         .filter(Boolean).filter(n => n !== '你' && String(n).length <= 12);
     let script;
-    if (hasProtocolTag(raw)) {
-        script = parseProtocol(raw, knownNames);
+    // 判定用「剥掉噪声后」的文本：思考块里常贴协议示例，
+    // 拿原文判定会把纯文本回复误判成协议模式。
+    const probe = stripNoise(raw);
+    if (hasProtocolTag(probe)) {
+        script = parseProtocol(probe, knownNames);
     } else {
-        script = parseSmart(raw, knownNames);
+        script = parseSmart(probe, knownNames);
     }
+    // 先合并碎句，再切长句：反过来会把切出来的碎片又留成一屏
+    mergeTiny(script, 6);
     // 长句按标点切屏
     expandLongSegments(script, Number(ctxInfo.chunk) || 60);
 
@@ -445,7 +611,8 @@ function parseMessage(raw, ctxInfo = {}) {
     script.chars = [];
     for (let i = script.segments.length - 1; i >= 0; i--) {
         const s = script.segments[i];
-        const name = s.t === 'say' ? s.who : (s.t === 'dir' && s.char ? s.char.name : null);
+        const name = (s.t === 'say' || s.t === 'inner') ? (s.who || null)
+            : (s.t === 'dir' && s.char ? s.char.name : null);
         if (name && !seen.has(name)) {
             seen.add(name);
             script.chars.unshift({ name, expr: (s.char && s.char.expr) || null });
