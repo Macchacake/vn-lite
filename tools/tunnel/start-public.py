@@ -165,7 +165,12 @@ def _spawn_cloudflared(cf, proxy=None):
         except OSError:
             pass
     args = [cf, "tunnel", "--url", "http://127.0.0.1:%d" % PROXY_PORT,
-            "--no-autoupdate", "--logfile", CF_LOG, "--loglevel", "info"]
+            "--no-autoupdate",
+            # 实测：默认的 QUIC 走国内网络（尤其经过 Clash TUN）会反复
+            # "timeout: no recent network activity" 掉线，隧道时通时断。
+            # http2 走 TCP，稳定得多。
+            "--protocol", "http2",
+            "--logfile", CF_LOG, "--loglevel", "info"]
     env = os.environ.copy()
     if proxy:
         # cloudflared 没有 --http-proxy 参数，靠 Go 的标准环境变量走代理

@@ -9,3 +9,10 @@ tools/tunnel/*.pid
 # 本地临时
 _h/
 *.tmp
+
+# 调试截图 / 界面 dump：绝不能进公开仓库（含手机屏幕内容）
+/*.png
+/*.jpg
+/*.jpeg
+/*.xml
+/_*.py
