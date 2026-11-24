@@ -327,7 +327,7 @@ function createStage(script, env) {
         renderSeg(segs[state.ptr], false);
     }
 
-    function showEnd() {
+    function showEnd(silent = false) {
         state.ended = true;
         state.interactive = false;
         stopTyper();
@@ -347,6 +347,8 @@ function createStage(script, env) {
             row.appendChild(fs);
         }
         textEl.appendChild(row);
+        // 剧场模式：本幕自然演完后，通知外层衔接下一幕
+        if (!silent && typeof env.onEnd === 'function') env.onEnd();
     }
 
     function restart() {
@@ -367,11 +369,56 @@ function createStage(script, env) {
         }
         state.ptr = segs.length - 1;
         if (lastSeg) renderSeg(lastSeg, true);
-        showEnd();
+        showEnd(true);
     }
 
+    // 点击推进；长按 450ms 进入快进（松开停止）
+    let pressTimer = 0;
+    let ffTimer = 0;
+    let pressing = false;
+    let longPressed = false;
+    let suppressClick = false;
+
+    function stopFF() {
+        if (ffTimer) { clearInterval(ffTimer); ffTimer = 0; }
+    }
+
+    function startFF() {
+        longPressed = true;
+        suppressClick = true;
+        stopTyper();
+        stopFF();
+        ffTimer = setInterval(() => {
+            if (state.disposed || state.interactive || state.ended) { stopFF(); return; }
+            if (typerActive()) { finishTyper(); return; }
+            next();
+        }, 110);
+    }
+
+    const isControl = (target) => target.closest('.vnl-btn, .vnl-endbtn, .vnl-choice-btn, .vnl-qte-bar, .vnl-dice, .vnl-input');
+
+    el.addEventListener('pointerdown', e => {
+        if (isControl(e.target)) return;
+        pressing = true;
+        longPressed = false;
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(() => { if (pressing) startFF(); }, 450);
+    });
+
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => {
+        el.addEventListener(ev, () => {
+            pressing = false;
+            clearTimeout(pressTimer);
+            if (longPressed) {
+                stopFF();
+                setTimeout(() => { suppressClick = false; }, 400);
+            }
+        });
+    });
+
     el.addEventListener('click', e => {
-        if (e.target.closest('.vnl-btn, .vnl-endbtn, .vnl-choice-btn, .vnl-qte-bar, .vnl-dice, .vnl-input')) return;
+        if (suppressClick) { e.stopPropagation(); e.preventDefault(); return; }
+        if (isControl(e.target)) return;
         next();
     });
 

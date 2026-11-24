@@ -20,8 +20,7 @@ import { groups, selected_group } from '../../../../scripts/group-chats.js';
 
 import * as settings from './src/settings.js';
 import { parseMessage } from './src/parser.js';
-import { bindEnvFactory, renderAll, mountOne } from './src/stage.js';
-import { openTheater, closeTheater, appendTheater } from './src/theater.js';
+import { openTheater, closeTheater, appendTheater, isOpen } from './src/theater.js';
 import { generateCG } from './src/sd.js';
 import { bgm } from './src/bgm.js';
 import { SCENE_DEFS, EXPR_LIST } from './src/assets.js';
@@ -141,12 +140,59 @@ function appendLatestToTheater() {
     if (script && script.usable) appendTheater(script, name2 || '演出');
 }
 
-function safeRenderAll(autoplayLast = true) {
-    try { renderAll(chat, { autoplayLast }); } catch (e) { console.warn('[VN-Lite] 渲染失败', e); }
+// ---------- 文游模式入口 ----------
+function buildTheaterItems() {
+    const ids = [];
+    for (let i = 0; i < chat.length; i++) {
+        const m = chat[i];
+        if (m && !m.is_user && m.mes && m.mes.trim()) ids.push(i);
+    }
+    const recent = ids.slice(-Math.max(1, settings.get().historyCount || 6));
+    const items = [];
+    for (const id of recent) {
+        const script = parseMessage(chat[id].mes, getCtxInfo());
+        if (script && script.usable) items.push({ script, title: name2 || '演出' });
+    }
+    return items;
 }
 
-function safeMountOne(id, autoplay = false) {
-    try { mountOne(chat, id, { autoplay }); } catch (e) { console.warn('[VN-Lite] 挂载失败', e); }
+function enterVnMode() {
+    if (isOpen()) return;
+    openTheater(buildTheaterItems(), envFactory, { startAtEnd: true });
+}
+
+// 在右下角魔棒菜单里加一个入口
+function installWandButton() {
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu) return false;
+    if (document.getElementById('vnl-wand-btn')) return true;
+
+    const item = document.createElement('div');
+    item.id = 'vnl-wand-btn';
+    item.className = 'list-group-item flex-container flexGap5 interactable';
+    item.tabIndex = 0;
+    item.title = '进入文游模式';
+    item.innerHTML = '<span style="font-size:18px;line-height:1">🎭</span><span>文游模式</span>';
+    const go = () => enterVnMode();
+    item.addEventListener('click', go);
+    item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
+    menu.appendChild(item);
+    return true;
+}
+
+function waitForWandButton() {
+    const wand = document.getElementById('extensionsMenuButton');
+    if (wand && !wand.dataset.vnlBound) {
+        wand.dataset.vnlBound = '1';
+        wand.addEventListener('click', () => setTimeout(installWandButton, 60));
+    }
+    if (installWandButton()) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+        if (installWandButton() || ++tries > 60) clearInterval(timer);
+    }, 500);
 }
 
 // ---------- 启动 ----------
@@ -155,55 +201,43 @@ async function init() {
         onChanged: (S) => {
             applyProtocolInjection();
             bgm.setEnabled(S.bgmOn);
-            safeRenderAll(false);
+            bgm.setVolume(S.bgmVol);
         },
     });
-    bindEnvFactory(envFactory);
 
     // BGM 初始状态 + 解锁
     bgm.setEnabled(settings.get().bgmOn);
     bgm.setVolume(settings.get().bgmVol);
     bgm.attachUnlock();
-    document.getElementById('vnl-bgmon')?.addEventListener('change', e => {
-        bgm.setEnabled(e.target.checked);
-    });
-    document.getElementById('vnl-bgmvol')?.addEventListener('input', e => {
-        bgm.setVolume(Number(e.target.value) / 100);
-    });
 
     // 协议注入（扩展加载即生效）
     applyProtocolInjection();
 
-    // 生成中标记：生成期间不渲染新舞台（流式输出期间显示原文）
+    // 清理旧版本可能留在聊天里的内嵌舞台，保证退出文游后看到原聊天
+    document.querySelectorAll('.mes_text.vnl-active').forEach(el => el.classList.remove('vnl-active'));
+    document.querySelectorAll('.vnl-stage').forEach(el => el.remove());
+
+    // 魔棒菜单入口（ST 的菜单可能比扩展晚就绪，轮询安装）
+    waitForWandButton();
+
+    // 生成中标记：生成结束后把最新回复追加为文游新幕
     eventSource.on(event_types.GENERATION_STARTED, () => { generating = true; });
     eventSource.on(event_types.GENERATION_ENDED, () => {
         generating = false;
-        setTimeout(() => {
-            safeRenderAll(true);
-            appendLatestToTheater(); // 剧场开着 → 新回复追加为新幕
-        }, 400);
+        setTimeout(() => appendLatestToTheater(), 400);
     });
 
     // 新消息（非流式 / 首条消息）
-    eventSource.on(event_types.MESSAGE_RECEIVED, (id) => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         if (generating) return; // 流式结束时由 GENERATION_ENDED 处理
-        setTimeout(() => { safeMountOne(Number(id), true); appendLatestToTheater(); }, 300);
+        setTimeout(() => appendLatestToTheater(), 300);
     });
 
-    // 消息编辑 / 滑动分支（swipe）
-    eventSource.on(event_types.MESSAGE_UPDATED, (id) => {
-        setTimeout(() => { safeMountOne(Number(id), false); }, 300);
-    });
-
-    // 聊天切换：重挂最近消息（旧消息静态展示，最新一条自动演出）
+    // 聊天切换：退出文游，回到原聊天
     eventSource.on(event_types.CHAT_CHANGED, () => {
         closeTheater();
         _appendedSig = '';
-        setTimeout(() => safeRenderAll(true), 700);
     });
-
-    // 初始渲染（扩展加载时聊天已就绪的情况）
-    setTimeout(() => safeRenderAll(true), 800);
 
     console.log('[VN-Lite] 文游Lite 已加载：' + settings.get().mode + ' 模式');
 }

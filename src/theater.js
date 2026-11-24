@@ -7,7 +7,7 @@
 // ============================================
 
 import { createStage, stopTyper } from './stage.js';
-import { save as saveSettings } from './settings.js';
+import { save as saveSettings, mountPanel } from './settings.js';
 import { bgm } from './bgm.js';
 
 let _open = null; // 当前剧场实例
@@ -16,8 +16,8 @@ function applyFont(px) {
     document.documentElement.style.setProperty('--vnl-fs', px + 'px');
 }
 
-function openTheater(items, envFactory) {
-    if (!items || !items.length) return;
+function openTheater(items, envFactory, opts = {}) {
+    if (!Array.isArray(items)) items = [];
     closeTheater(); // 防重入
 
     const env = Object.assign({}, envFactory(), { openTheater: null, allowTheater: false });
@@ -66,9 +66,40 @@ function openTheater(items, envFactory) {
                 <button class="vnl-menu-btn vnl-menu-half" data-m="fbig">A+ 放大</button>
             </div>
             <button class="vnl-menu-btn" data-m="bgm">♪ 氛围音乐</button>
-            <button class="vnl-menu-btn vnl-menu-danger" data-m="exit">✕ 退出剧场</button>
+            <button class="vnl-menu-btn" data-m="settings">⚙ 文游设置</button>
+            <button class="vnl-menu-btn vnl-menu-danger" data-m="exit">✕ 退出文游</button>
         </div>`;
     overlay.appendChild(menu);
+
+    // ---------- 文游设置页（所有设置都在这里） ----------
+    const settingsPage = document.createElement('div');
+    settingsPage.className = 'vnl-settings';
+    settingsPage.innerHTML = `
+        <div class="vnl-settings-head">
+            <button class="vnl-btn" data-act="back" title="返回">←</button>
+            <div class="vnl-settings-title">文游设置</div>
+            <div class="vnl-settings-spacer"></div>
+        </div>
+        <div class="vnl-settings-body"></div>`;
+    overlay.appendChild(settingsPage);
+
+    const settingsBody = settingsPage.querySelector('.vnl-settings-body');
+    let settingsMounted = false;
+
+    function showSettings() {
+        if (!settingsMounted) {
+            mountPanel(settingsBody);
+            settingsMounted = true;
+        }
+        settingsPage.classList.add('vnl-settings-on');
+    }
+    function hideSettings() {
+        settingsPage.classList.remove('vnl-settings-on');
+    }
+    settingsPage.querySelector('[data-act="back"]').addEventListener('click', e => {
+        e.stopPropagation();
+        hideSettings();
+    });
 
     const menuOpen = () => menu.classList.contains('vnl-menu-on');
     const showMenu = () => { refreshMenu(); menu.classList.add('vnl-menu-on'); };
@@ -86,6 +117,17 @@ function openTheater(items, envFactory) {
     let atEndBox = false;
     const instance = { closed: false };
 
+    // 当前幕自然演完 → 若后面还有排队的新幕，自动衔接
+    function handleStageEnd() {
+        if (instance.closed) return;
+        if (auto) return; // 自动模式由 scheduleAuto 统一推进
+        if (idx + 1 < items.length) {
+            setTimeout(() => {
+                if (!instance.closed && stage && stage._ended) load(idx + 1);
+            }, 900);
+        }
+    }
+
     function load(i) {
         clearTimeout(autoTimer);
         if (stage) { stage.dispose(); stage = null; }
@@ -96,14 +138,16 @@ function openTheater(items, envFactory) {
             stage = null;
             const box = document.createElement('div');
             box.className = 'vnl-theater-endbox';
-            box.innerHTML = '<div class="vnl-theater-endtext">等待新的剧情…</div>';
+            box.innerHTML = items.length
+                ? '<div class="vnl-theater-endtext">等待新的剧情…</div>'
+                : '<div class="vnl-theater-endtext">还没有可以演出的剧情。<br>先回到酒馆发一条消息，再点魔棒进来。</div>';
             const again = document.createElement('button');
             again.className = 'vnl-menu-btn';
             again.textContent = '↻ 从头再看';
             again.addEventListener('click', e => { e.stopPropagation(); load(0); });
             const exit = document.createElement('button');
             exit.className = 'vnl-menu-btn vnl-menu-danger';
-            exit.textContent = '✕ 退出剧场';
+            exit.textContent = '✕ 退出文游';
             exit.addEventListener('click', e => { e.stopPropagation(); closeTheater(); });
             box.append(again, exit);
             slot.innerHTML = '';
@@ -112,7 +156,8 @@ function openTheater(items, envFactory) {
         }
         atEndBox = false;
         titleEl.textContent = items[i].title || `第 ${i + 1} 幕`;
-        stage = createStage(items[i].script, env);
+        const stageEnv = Object.assign({}, env, { onEnd: handleStageEnd });
+        stage = createStage(items[i].script, stageEnv);
         slot.appendChild(stage.el);
         stage.next();
         if (auto) scheduleAuto();
@@ -125,7 +170,7 @@ function openTheater(items, envFactory) {
         const wasOver = atEndBox || (stage && stage._ended);
         flashNew();
         // 当前一幕已演完/处于结尾 → 自动进入新幕；否则看完当前幕后自然衔接
-        if (wasOver) load(idx + 1);
+        if (wasOver) load(atEndBox ? items.length - 1 : idx + 1);
         return true;
     }
 
@@ -187,6 +232,9 @@ function openTheater(items, envFactory) {
             bgm.setEnabled(S.bgmOn);
             saveSettings();
             refreshMenu();
+        } else if (act === 'settings') {
+            hideMenu();
+            showSettings();
         } else if (act === 'exit') {
             closeTheater();
         }
@@ -194,12 +242,18 @@ function openTheater(items, envFactory) {
 
     // ---------- 键盘（桌面端补充） ----------
     function onKey(e) {
-        if (e.key === 'Escape') { menuOpen() ? hideMenu() : closeTheater(); }
+        if (e.key === 'Escape') {
+            if (settingsPage.classList.contains('vnl-settings-on')) hideSettings();
+            else if (menuOpen()) hideMenu();
+            else closeTheater();
+        }
         if (e.key === 'ArrowRight' && stage) stage.next();
     }
     document.addEventListener('keydown', onKey);
 
-    load(0);
+    // 从魔棒进入时直接看最新一幕；从舞台按钮进入时只有一幕，行为不变
+    const start = opts.startAtEnd === false ? 0 : Math.max(0, items.length - 1);
+    load(start);
     _open = {
         items,
         append,
