@@ -133,6 +133,24 @@ const SCENE_PROMPT = {
     '黄昏': 'sunset, warm orange sky, long shadows, silhouettes',
 };
 
+// 背景专用画风尾巴：把「画五官」的词摘掉。
+// 实测：otome 预设里有 beautiful detailed eyes / elegant，Animagine XL
+// 看到这几个词会直接画一张大脸，把「背景」生成成人物特写 —— 手机上那张
+// 占满整个舞台的粉发少女就是这么来的，而它本该是宗门东院的场景图。
+const BG_FACE_TAGS = new Set([
+    'beautiful detailed eyes', 'large expressive eyes', 'detailed eyes',
+    'detailed skin', 'elegant', 'romantic atmosphere', '1girl', '1boy',
+    'glossy hair', 'tall proportions',
+]);
+
+function bgTail() {
+    return String(styleOf(S).tail || '')
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t && !BG_FACE_TAGS.has(t.toLowerCase()))
+        .join(', ');
+}
+
 // 中文场景词 → 英文背景标签。
 // 踩过的坑：角色卡写的是 [scene:某宗门·外门东院] 这种中文专有名词，
 // 而 SCENE_PROMPT 只有「教室 / 街道 / 咖啡馆」这些现代场景，
@@ -167,7 +185,13 @@ export function scenePrompt(cat) {
         }
         base = tags.length ? tags.join(', ') : 'anime background art, detailed scenery';
     }
-    return joinTags([base, 'no people, anime background, highly detailed', styleOf(S).tail]);
+    // 「no people / 纯场景」放在最前面，权重最高；画风尾巴用去人脸版本。
+    return joinTags([
+        'scenery only, pure background, no people, no humans, no character, no face, no figure',
+        base,
+        'no people, anime background art, highly detailed',
+        bgTail(),
+    ]);
 }
 
 // 抠色专用的幕布描述：要「纯色、均匀、无渐变」，否则 flood fill 会被
@@ -329,7 +353,7 @@ export function prefetch(script) {
     for (const seg of script.segments || []) {
         if (seg.t === 'dir' && seg.scene) wantBg(seg.scene);
         if (seg.t === 'dir' && seg.char && seg.char.name) wantChar(seg.char.name);
-        if (seg.t === 'say' && seg.who) wantChar(seg.who);
+        if ((seg.t === 'say' || seg.t === 'inner') && seg.who) wantChar(seg.who);
         if (seg.t === 'item' && seg.name) wantItem(seg.name);
         if (added >= max) break;
     }

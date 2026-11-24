@@ -161,11 +161,16 @@ function stripVerbTail(s) {
 }
 
 // 「老人在炉边坐下」这类：主语 + 介词短语，取前缀当人名
-const PREP_HEAD = /^[在向从把将对给用和与跟替为到于]/;
+// 「面向 / 朝 / 顺着」也算介词头：「某角色面向楼梯口…」→ 该角色名
+const PREP_HEAD = /^[在向从把将对给用和与跟替为到于面朝顺沿]/;
+// 人名末尾不会粘这些身体/神态字。命中说明截取过头了
+// （「某角色面」其实是「角色名」+「面向」的第一个字）。
+const STATE_TAIL = /[面色容态神情眼手声头脚步影身背腰唇眉指脸颊眸]$/;
 
 function tryPrefixName(head) {
     for (let len = 2; len <= 4 && len < head.length; len++) {
         const p = head.slice(0, len);
+        if (STATE_TAIL.test(p)) continue;
         if (/^[我你他她它\d]/.test(p)) continue;
         if (!isNameLike(p)) continue;
         const rest = head.slice(len);
@@ -233,6 +238,12 @@ function pickSpeaker(pre, knownNames) {
         .replace(/^\s*(于是|然后|接着|这时|这时候|紧接着)\s*/, '')
         .trim();
     const bare = stripVerbTail(head);
+    // 「某某面向楼梯口略微颔首」→ 旧逻辑推出「某某面」，名字栏显示成一个
+    // 根本不存在的人，还会凭空多生成一张立绘。末尾粘了身体/神态字时截掉。
+    if (bare.length >= 3 && STATE_TAIL.test(bare)) {
+        const cut = bare.slice(0, -1);
+        if (isNameLike(cut)) return cut;
+    }
     if (isNameLike(bare)) return bare;
     // 英文名：「Alice smiled」→ Alice
     const latin = head.match(/^[A-Z][A-Za-z'’\-]{1,15}/);
@@ -472,9 +483,18 @@ function pushSpeech(script, line, knownNames, fallbackSpeaker) {
     const re = new RegExp(QUOTE_RE.source, 'g');
     let m, cursor = 0, any = false;
     while ((m = re.exec(line))) {
-        any = true;
         const quote = (m[1] ?? m[2] ?? m[3] ?? '').trim();
         const before = line.slice(cursor, m.index).trim();
+        const after = line.slice(re.lastIndex);
+        // 短引号往往是绰号/术语而不是台词，例如「把『某个绰号』这顶帽子按实」。
+        // 旧逻辑会切成 say(绰号) + narr(这顶帽子按实。)，屏幕上就像有人
+        // 凭空喊了一句绰号。这种引号整体并回一条旁白。
+        if (quote && quote.length <= 8 && !/[。！？!?…；;，,、]/.test(quote)
+            && before.length >= 8 && after && /^[\u4e00-\u9fa5]/.test(after)) {
+            script.segments.push({ t: 'narr', text: cleanNarr(before + '「' + quote + '」' + after) });
+            return;
+        }
+        any = true;
         let who = null;
         if (before) {
             who = pickSpeaker(before, knownNames);
@@ -605,6 +625,8 @@ function parseMessage(raw, ctxInfo = {}) {
     mergeTiny(script, 6);
     // 长句按标点切屏
     expandLongSegments(script, Number(ctxInfo.chunk) || 60);
+    // 台词说话人不做「从上下文猜」：试过，会把哥哥的台词挂到弟弟名下，
+    // 比不显示名字更误导。正确做法是让 AI 写 [char:]（见 protocol.js 第 22 条）。
 
     // 收集出场角色（最多 3 个最近说话人）
     const seen = new Set();
