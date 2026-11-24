@@ -18,6 +18,7 @@ const DEFAULTS = {
     // AI 绘图（ComfyUI，电脑端运行，手机填局域网地址）
     sdOn: false,
     sdUrl: '',          // 例：http://192.168.1.100:8188
+    sdHistory: [],      // 自动记录曾经填过的地址，供自动探测/回退使用
     sdModel: '',        // 留空自动选择
 };
 
@@ -30,6 +31,7 @@ function init(extSettings, saveFn, hooks = {}) {
     _hooks = hooks;
     extSettings.vnLite = Object.assign({}, DEFAULTS, extSettings.vnLite || {});
     extSettings.vnLite.maps = Object.assign({ chars: {}, scenes: {} }, extSettings.vnLite.maps);
+    extSettings.vnLite.sdHistory = Array.isArray(extSettings.vnLite.sdHistory) ? extSettings.vnLite.sdHistory : [];
     S = extSettings.vnLite;
     buildPanel();
     return S;
@@ -81,15 +83,62 @@ function buildPanel() {
     const sdOn = wrap.querySelector('#vnl-sdon');
     sdOn.checked = S.sdOn;
     sdOn.addEventListener('change', () => { S.sdOn = sdOn.checked; save(); });
+
     const sdUrl = wrap.querySelector('#vnl-sdurl');
     sdUrl.value = S.sdUrl;
-    sdUrl.addEventListener('change', () => { S.sdUrl = sdUrl.value.trim(); save(); });
+
+    // 记住用户填过的地址（最多 8 个），供自动探测和生成时回退
+    const rememberUrl = (raw) => {
+        const b = String(raw || '').trim();
+        if (!b) return;
+        S.sdUrl = b;
+        S.sdHistory = Array.isArray(S.sdHistory) ? S.sdHistory : [];
+        if (!S.sdHistory.includes(b)) {
+            S.sdHistory.unshift(b);
+            S.sdHistory = S.sdHistory.slice(0, 8);
+        }
+        save();
+    };
+
+    sdUrl.addEventListener('change', () => rememberUrl(sdUrl.value));
+
+    // 一键探测：依次尝试历史地址、酒馆同主机 8188、127.0.0.1
+    wrap.querySelector('#vnl-sdscan').addEventListener('click', async () => {
+        const out = wrap.querySelector('#vnl-sdtest-out');
+        const lines = [];
+        out.textContent = '自动探测中…';
+        try {
+            const { detectComfyUI } = await import('./sd.js');
+            const found = await detectComfyUI(S, (msg) => {
+                lines.push(msg);
+                out.textContent = lines.join('\n');
+            });
+            if (found) {
+                rememberUrl(found.base);
+                sdUrl.value = found.base;
+                lines.push('✓ 已自动选用：' + found.base + '（模型 ' + found.model + '）');
+            } else {
+                lines.push('✗ 未找到可用地址。请确认 ComfyUI 已启动、防火墙放行，或手动填写可访问的地址。');
+            }
+        } catch (e) {
+            lines.push('✗ 探测失败：' + (e && e.message ? e.message : e));
+        }
+        out.textContent = lines.join('\n');
+    });
+
+    // 详细诊断：区分超时 / HTTP 状态 / CORS / Mixed Content
     wrap.querySelector('#vnl-sdtest').addEventListener('click', async () => {
         const out = wrap.querySelector('#vnl-sdtest-out');
         out.textContent = '测试中…';
-        const { testConnection } = await import('./sd.js');
-        const model = await testConnection(S);
-        out.textContent = model ? '✓ 已连接，模型：' + model : '✗ 无法连接（检查地址、ComfyUI 是否已启动、防火墙）';
+        try {
+            const { testConnection } = await import('./sd.js');
+            const r = await testConnection(S, 8000);
+            out.textContent = r.ok
+                ? '✓ 已连接：' + r.base + '\n模型：' + r.model
+                : '✗ ' + r.reason + (r.base ? '\n地址：' + r.base : '');
+        } catch (e) {
+            out.textContent = '✗ 测试失败：' + (e && e.message ? e.message : e);
+        }
     });
 
     // --- 素材映射编辑器 ---
@@ -218,7 +267,7 @@ function panelHTML() {
             </div>
             <hr>
             <b>AI 绘图（CG）</b>
-            <small>需要电脑端运行 ComfyUI（--listen 模式）。开启后，AI 在重要剧情节点自动生成插画。手机使用时填写电脑的局域网地址。</small>
+            <small>ComfyUI 需以 --listen 启动。点「自动探测」会依次尝试：已填地址 → 历史地址 → 酒馆同主机 8188 → 127.0.0.1，并自动选用可用地址；生成时也会自动回退到上次可用的地址。</small>
             <div class="vnl-set-row">
                 <label>启用 AI 绘图</label>
                 <input type="checkbox" id="vnl-sdon">
@@ -228,8 +277,9 @@ function panelHTML() {
                 <input type="text" id="vnl-sdurl" placeholder="http://192.168.x.x:8188" style="flex:1">
             </div>
             <div class="vnl-set-row">
+                <button class="vnl-map-add" id="vnl-sdscan" style="flex:0 0 auto">自动探测</button>
                 <button class="vnl-map-add" id="vnl-sdtest" style="flex:0 0 auto">测试连接</button>
-                <small id="vnl-sdtest-out" style="flex:1"></small>
+                <small id="vnl-sdtest-out" style="flex:1;white-space:pre-line;word-break:break-all"></small>
             </div>
             <hr>
             <b>角色立绘映射</b>
