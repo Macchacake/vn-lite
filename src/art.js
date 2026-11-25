@@ -262,14 +262,18 @@ const FLAT_SPEC = {
     green: 'solid green backdrop, uniform flat green background',
     blue: 'solid blue backdrop, uniform flat blue background',
     magenta: 'solid magenta backdrop, uniform flat magenta background',
-    // 服务端 AI 抠图可用时用中性灰：不会把颜色吃进头发和裙子里
-    grey: 'plain solid grey background, uniform flat backdrop, no pattern, no scenery',
+    // 服务端 AI 抠图可用时用中性灰：不会把颜色吃进头发和裙子里。
+    // 用 Danbooru 风格标签（simple background / grey background）比自然语言描述稳：
+    // 自然语言「plain solid grey background」实测会被画成「灰底 + 白色竖条」，
+    // 抠图时白条会留成一个白方块。
+    grey: 'simple background, grey background, flat color, uniform color, no pattern',
 };
 
 // 会把幕布画脏 / 让抠图失败的东西，统一放进负向。
 const MATTE_NEG = [
     'decorative background', 'pattern', 'ornament', 'ribbon', 'swirls', 'floating strands',
     'window', 'curtain', 'floor', 'room', 'scenery', 'detailed background', 'gradient background',
+    'white stripe', 'border', 'frame', 'column', 'pillar', 'two-tone background', 'split background',
     'sparkle', 'bokeh', 'lens flare', 'glow', 'backlighting', 'light rays', 'vignette',
     'soft focus', 'depth of field', 'noise', 'texture', 'drop shadow', 'reflection',
     'multiple views', 'multiple characters',
