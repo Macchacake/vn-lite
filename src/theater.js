@@ -157,8 +157,6 @@ function openTheater(items, envFactory, opts = {}) {
         // 每次打开都重建：模型列表 / 素材统计 / 角色性别都要是最新的
         mountPanel(settingsBody, {
             openGallery: () => { hideSettings(); showGallery(); },
-            knownChars: env.knownChars,
-            generateLooks: env.generateLooks,
         });
         settingsMounted = true;
         settingsPage.classList.add('vnl-settings-on');

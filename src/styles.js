@@ -82,15 +82,14 @@ export function joinTags(list) {
     return out.join(', ');
 }
 
-// 这些标签会「往背景上加东西」（闪粉、光晕、花瓣、景深），
-// 抠透明底时必须摘掉，否则绿幕会被盖住，抠不干净。
+// 只有「会往背景上画东西」的标签才需要从透明底立绘里摘掉。
+// 人物上色/线条风格（gradient shading、screentone、glossy hair、film grain…）
+// 属于画风，删掉会让脸和衣服变得又平又糙——这是之前立绘丑的主因之一。
 export const BG_TAGS = new Set([
     'sparkle', 'floating particles', 'bokeh', 'backlighting', 'romantic atmosphere',
     'lens flare', 'glow', 'halo', 'flower petals', 'cherry blossoms', 'petals',
     'gradient background', 'detailed background', 'scenery', 'light rays', 'sunburst',
-    'vignette', 'depth of field', 'blurry background', 'flower motif', 'screentone',
-    'halftone', 'speed lines', 'film grain', 'paper texture', 'soft vignette',
-    'wet on wet', 'blooming', 'soft edges', 'soft washes', 'gradient shading',
+    'vignette', 'soft vignette', 'depth of field', 'blurry background', 'flower motif',
 ]);
 
 export function stripBgTags(tail) {
@@ -114,8 +113,7 @@ export const SIZE = {
 // 实测会生成「一张大脸 + 一个全身小人」的怪图。
 // 这串是实测过脚不会被裁、人物约占画面高度 85% 的组合。
 export const DEFAULT_PORTRAIT_TPL =
-    'wide shot, full body shot, solo, single character, standing, front view, head to toe, ' +
-    'full-length figure, feet visible, entire body in frame, shoes visible, looking at viewer';
+    'solo, full body, standing, front view, looking at viewer, feet visible';
 
 export const DEFAULT_ITEM_TPL =
     'game item icon, single object, centered, simple dark background, soft rim light';

@@ -254,17 +254,26 @@ export function scenePrompt(cat) {
     ]);
 }
 
-// 抠色专用的幕布描述：要「纯色、均匀、无渐变」，否则 flood fill 会被
-// 渐变和光晕带跑，边缘必然发毛。
-const KEY_SPEC = {
-    green: 'flat pure green background, solid chroma key green, uniform #00FF00 backdrop, completely flat color, no gradient',
-    blue: 'flat pure blue background, solid chroma key blue, uniform #0000FF backdrop, completely flat color, no gradient',
-    magenta: 'flat pure magenta background, solid chroma key magenta, uniform #FF00FF backdrop, completely flat color, no gradient',
+// 幕布描述只表达「纯色、无图案」这一层意思。
+// 旧版塞了 chroma key / #00FF00 / completely flat color 这类词：模型不懂「色键」，
+// 会把亮绿色画成飘带和头发、把「纯色」要求理解成装饰花纹背景——这是立绘丑的头号元凶。
+// 实测同一模型只改这一串，人物就从「脸崩 + 绿飘带」变成五官衣服都有细节。
+const FLAT_SPEC = {
+    green: 'solid green backdrop, uniform flat green background',
+    blue: 'solid blue backdrop, uniform flat blue background',
+    magenta: 'solid magenta backdrop, uniform flat magenta background',
+    // 服务端 AI 抠图可用时用中性灰：不会把颜色吃进头发和裙子里
+    grey: 'plain solid grey background, uniform flat backdrop, no pattern, no scenery',
 };
 
-// 有服务端 AI 抠图时用中性灰：灰幕布不会被头发/裙子吃进去，
-// 抠出来不会有一圈绿边（绿幕再怎么 despill 也救不干净半透明发梢）。
-const GREY_SPEC = 'flat medium grey background, solid grey backdrop, completely flat color, no gradient';
+// 会把幕布画脏 / 让抠图失败的东西，统一放进负向。
+const MATTE_NEG = [
+    'decorative background', 'pattern', 'ornament', 'ribbon', 'swirls', 'floating strands',
+    'window', 'curtain', 'floor', 'room', 'scenery', 'detailed background', 'gradient background',
+    'sparkle', 'bokeh', 'lens flare', 'glow', 'backlighting', 'light rays', 'vignette',
+    'soft focus', 'depth of field', 'noise', 'texture', 'drop shadow', 'reflection',
+    'multiple views', 'multiple characters',
+].join(', ');
 
 function alphaOn() { return !!(S && S.portraitAlpha); }
 
@@ -275,17 +284,17 @@ export function charPrompt(name) {
     let tail = st.tail;
     let bgTag = '';
     if (alphaOn()) {
-        // 抠图时：摘掉会画背景的标签，再补一条纯色幕布要求。
+        // 只摘掉「会往背景上画东西」的标签；人物上色/线条风格全部保留。
         tail = stripBgTags(tail);
         tpl = tpl.replace(/simple background,?\s*/gi, '');
-        // 「opaque hair」很关键：AI 画飘逸长发时会把它画成半透明，
-        // 幕布颜色从头发里透出来，抠完之后头发是绿的，怎么修都救不回来。
-        const spec = matteOk() ? GREY_SPEC : (KEY_SPEC[S.portraitKey] || KEY_SPEC.green);
+        // 「opaque hair」很关键：飘逸长发被画成半透明时，幕布颜色会透出来，
+        // 抠完之后头发是绿的，怎么修都救不回来。
+        const spec = matteOk() ? FLAT_SPEC.grey : (FLAT_SPEC[S.portraitKey] || FLAT_SPEC.green);
         bgTag = spec + ', opaque solid hair, fully opaque clothing';
     }
-    // 顺序 = 权重：构图 > 外观 > 幕布 > 画风
-    // 构图必须排第一，否则模型容易只顾画脸不管全身；外观紧跟其后保证像本人。
-    return joinTags([tpl, hint, bgTag, tail]);
+    // 幕布放最后，权重最低，尽量少干扰人物和画风。
+    // 质量词由 sd.js 统一前置，这里只管构图 / 外观 / 画风 / 幕布。
+    return joinTags([tpl, hint, tail, bgTag]);
 }
 
 export function charNeg(name) {
@@ -294,10 +303,8 @@ export function charNeg(name) {
     if (alphaOn()) {
         // 全身立绘最容易被裁的就是脚，这几个词是实测下来最管用的
         parts.push('cowboy shot, upper body, close-up, portrait, cropped legs, cut off feet, out of frame');
-        parts.push('detailed background, scenery, gradient background, multiple views, multiple characters');
-        // 这些会把幕布画脏，是抠图失败的头号原因
-        parts.push('vignette, glow, backlighting, light rays, soft focus, depth of field, gradient, noise, texture, drop shadow, reflection');
         parts.push('translucent hair, transparent hair, see-through hair, glass hair, semi-transparent clothing');
+        parts.push(MATTE_NEG);
     }
     return parts.filter(Boolean).join(', ');
 }

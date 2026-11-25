@@ -214,21 +214,32 @@ export async function matteStatus(base) {
 
 // ---------- 最小工作流（API 格式） ----------
 // 尺寸由调用方按用途传入（立绘竖长条 / 背景横图 / 图标方图）
-const NEG_BASE = 'lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry';
+const NEG_BASE = [
+    'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digits, fewer digits, cropped',
+    'worst quality, low quality, low score, bad score, average score, jpeg artifacts',
+    'signature, watermark, username, blurry, deformed, disfigured, mutation',
+    'extra limbs, malformed limbs, fused fingers, long neck, bad proportions',
+    'poorly drawn face, blank face, simple face, poorly drawn hands',
+].join(', ');
 
 function buildWorkflow(model, prompt, opts = {}, matte = null) {
     const isXL = /xl/i.test(model);
     // 同一个角色必须用同一个种子，否则每次重画都换一张脸，
     // 观众会觉得「立绘根本不贴合人物」。opts.seed 由 art.js 按 kind|key 派生。
     const seed = Number.isFinite(opts.seed) ? (opts.seed >>> 0) : (Math.random() * 4294967295 >>> 0);
-    // Animagine XL 4.0 官方规范：质量标签放最后 + 官方完整负向，CFG 5 / 28 步
-    const pos = prompt + ', masterpiece, high score, great score, absurdres';
+    // 质量词位置随架构走：SD1.5 系（Anything / MeinaMix）必须前置才吃得住细节，
+    // Animagine XL 官方规范要求放最后 + 高分标签。实测把两者混用会让脸和衣服变糙。
+    // 不要在这里加 latent 高清修复：SD1.5 二次采样会产生明显涂抹/未完成感，
+    // 画质反而不如单阶段直出（同一提示词 A/B 实测过）。
+    const pos = isXL
+        ? prompt + ', masterpiece, high score, great score, absurdres'
+        : 'masterpiece, best quality, ultra-detailed, highly detailed, sharp focus, beautiful detailed eyes, ' + prompt;
     const neg = [opts.negative, NEG_BASE].filter(Boolean).join(', ');
     const fallback = isXL ? [832, 1216] : [512, 768];
     const W = Number(opts.w) || fallback[0];
     const H = Number(opts.h) || fallback[1];
     const wf = {
-        '3': { class_type: 'KSampler', inputs: { seed, steps: isXL ? 28 : 22, cfg: isXL ? 5 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+        '3': { class_type: 'KSampler', inputs: { seed, steps: isXL ? 28 : 26, cfg: isXL ? 5 : 7, sampler_name: 'euler_ancestral', scheduler: 'normal', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
         '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: model } },
         '5': { class_type: 'EmptyLatentImage', inputs: { width: W, height: H, batch_size: 1 } },
         '6': { class_type: 'CLIPTextEncode', inputs: { text: pos, clip: ['4', 1] } },

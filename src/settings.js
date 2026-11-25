@@ -4,7 +4,7 @@
 // 文游全屏界面内调用 mountPanel() 渲染。
 // ============================================
 
-import { DEFAULT_PROTOCOL } from './protocol.js';
+import { DEFAULT_PROTOCOL, isLegacyProtocol } from './protocol.js';
 import { STYLE_PRESETS, DEFAULT_STYLE, DEFAULT_PORTRAIT_TPL, DEFAULT_ITEM_TPL } from './styles.js';
 import * as memory from './memory.js';
 
@@ -68,6 +68,13 @@ function init(extSettings, saveFn, hooks = {}) {
     v.sceneHints = (v.sceneHints && typeof v.sceneHints === 'object') ? v.sceneHints : {};
     v.lookSource = (v.lookSource && typeof v.lookSource === 'object') ? v.lookSource : {};
     if (typeof v.memorySync !== 'boolean') v.memorySync = true;
+    // v0.9.2：协议只保留格式规范。设置里点过「填入当前协议」会存下旧默认，
+    // 不清掉的话新默认永远不生效；用户真正手写的协议不含旧特征，原样保留。
+    if (isLegacyProtocol(v.protocol)) v.protocol = '';
+    // v0.9.2：旧立绘模板堆了 12 个近义构图词，权重全被它吃掉 → 脸和衣服变糙。
+    if (/wide shot, full body shot|entire body in frame|shoes visible/.test(v.portraitTpl || '')) {
+        v.portraitTpl = DEFAULT_PORTRAIT_TPL;
+    }
     delete v.artGender;
     v.artCache = Object.assign({ bg: {}, char: {}, item: {}, cg: {} }, v.artCache);
     v.gallery = Array.isArray(v.gallery) ? v.gallery : [];
@@ -460,7 +467,6 @@ function bindPanel(wrap, hooks) {
                 const st = memory.syncManually();
                 paintMemStatus();
                 flash(wrap, st.available ? '已同步记忆数据' : '未检测到柏宝书：' + st.text);
-                bindPromptList(wrap, hooks);   // 刷新来源标记
             } finally {
                 memBtn.disabled = false;
                 memBtn.textContent = old;
@@ -472,70 +478,6 @@ function bindPanel(wrap, hooks) {
     bindMapEditor(wrap, 'chars', '角色名', '立绘图片 URL（留空用剪影）');
     bindMapEditor(wrap, 'scenes', '场景类目', '背景图片 URL（留空用内置 SVG）');
 
-    // --- 角色性别 ---
-    bindPromptList(wrap, hooks);
-}
-
-// 角色外观提示词：名字 + 英文提示词输入框。
-// 这些提示词就是生成立绘时用的那一串，性别、发色、服装都写在这里。
-function bindPromptList(wrap, hooks) {
-    const host = wrap.querySelector('#vnl-prompt-list');
-    if (!host) return;
-    let list = [];
-    try { list = (hooks && hooks.knownChars) ? hooks.knownChars() : []; } catch (e) { list = []; }
-
-    const genBtn = wrap.querySelector('#vnl-looks-gen');
-    if (genBtn) {
-        genBtn.addEventListener('click', async () => {
-            if (!hooks || !hooks.generateLooks) return;
-            genBtn.disabled = true;
-            const old = genBtn.textContent;
-            genBtn.textContent = '正在让 AI 写…';
-            try {
-                const r = await hooks.generateLooks();
-                flash(wrap, `已写入 ${r.ok} / ${r.total} 个角色的外观提示词`);
-                bindPromptList(wrap, hooks);
-            } catch (e) {
-                flash(wrap, '生成失败：' + (e && e.message ? e.message : e));
-            } finally {
-                genBtn.disabled = false;
-                genBtn.textContent = old;
-            }
-        });
-    }
-
-    if (!Array.isArray(list) || !list.length) {
-        host.innerHTML = '<div class="vnl-map-empty">（当前聊天里没读到角色，进入有角色的聊天后这里会列出全部角色）</div>';
-        return;
-    }
-    host.innerHTML = '';
-    for (const c of list.slice(0, 40)) {
-        const row = document.createElement('div');
-        row.className = 'vnl-prompt-row';
-        const src = S.lookSource && S.lookSource[c.name];
-        const isAuto = S.lookAuto && S.lookAuto[c.name] === true;
-        const badge = src === 'memory' ? '记忆自动'
-            : isAuto ? 'AI 生成'
-            : (S.artPrompts[c.name] ? '手动' : '未设置 · 立绘会是随机角色');
-        row.innerHTML = `<div class="vnl-prompt-head">
-                <span class="vnl-prompt-name">${escAttr(c.name)}</span>
-                <span class="vnl-prompt-badge">${badge}</span>
-            </div>
-            <input class="vnl-prompt-input" type="text" value="${escAttr(S.artPrompts[c.name] || '')}"
-                placeholder="1boy, black hair, red eyes, white coat, tall">`;
-        const inp = row.querySelector('input');
-        inp.addEventListener('change', () => {
-            const v = inp.value.trim();
-            if (v) S.artPrompts[c.name] = v; else delete S.artPrompts[c.name];
-            // 用户改过 → 归用户所有，AI / 记忆之后都不再覆盖
-            if (S.lookAuto) delete S.lookAuto[c.name];
-            if (!S.lookSource) S.lookSource = {};
-            if (v) S.lookSource[c.name] = 'manual'; else delete S.lookSource[c.name];
-            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
-            save();
-        });
-        host.appendChild(row);
-    }
 }
 
 function flash(wrap, msg) {
@@ -633,7 +575,7 @@ function settingsHTML() {
 
         <div class="vnl-set-section">
             <div class="vnl-set-title">协议注入（可编辑）</div>
-            <small>这里的内容会作为系统提示词注入给 AI。留空则使用内置默认协议。<b>每段回复必须以 [choice:] 或 [input:] 收尾</b>，否则玩家没有可点的东西。</small>
+            <small>这里的内容会作为系统提示词注入给 AI，默认只给出演出标签的格式规范（不含写作风格、节奏或人设要求）。留空即用内置默认。<b>每段回复必须以 [choice:] 或 [input:] 收尾</b>，否则玩家没有可点的东西。角色外观会自动从剧情人设与柏宝书读取，不需要写进协议。</small>
             <textarea id="vnl-protocol" class="vnl-protocol" rows="12" spellcheck="false"></textarea>
             <div class="vnl-set-row vnl-set-btns">
                 <button class="vnl-map-add" id="vnl-protocol-fill">填入当前协议</button>
@@ -691,7 +633,7 @@ function settingsHTML() {
 
         <div class="vnl-set-section">
             <div class="vnl-set-title">记忆插件联动</div>
-            <small>自动读取「柏宝书」等记忆插件里的人物相貌、地点场景，关联到立绘和背景。装了柏宝书并开启后，人物立绘按记忆里的长相生成、背景按当前地点生成，无需手动填表。手填的提示词不会被覆盖。</small>
+            <small>角色外观提示词已改为全自动读取：优先「柏宝书」等记忆插件里的人物相貌，其次读角色卡／剧情人设里的外貌描写，最后落到当前聊天文本。设置里不再需要手填，也不会让 AI 现编。装了柏宝书并开启后，人物立绘按记忆里的长相生成、背景按当前地点生成。</small>
             <div class="vnl-set-row">
                 <label>自动同步记忆</label>
                 <input type="checkbox" id="vnl-memsync">
@@ -700,13 +642,6 @@ function settingsHTML() {
                 <button class="vnl-map-add" id="vnl-mem-sync" style="flex:0 0 auto">立即同步</button>
                 <small id="vnl-mem-status" style="flex:1;word-break:break-all"></small>
             </div>
-        </div>
-
-        <div class="vnl-set-section">
-            <div class="vnl-set-title">角色外观提示词（决定立绘长什么样）</div>
-            <small>这里每个角色对应一串英文标签，生成立绘时原样拼进提示词。想让立绘贴合角色，就靠这一串：性别、发色发型、瞳色、体型、服装。点下面的按钮可以让 AI 读角色卡自动写一份。</small>
-            <button class="vnl-map-add" id="vnl-looks-gen">让 AI 按角色卡写外观提示词</button>
-            <div id="vnl-prompt-list" class="vnl-prompt-list"></div>
         </div>
 
         <div class="vnl-set-section">

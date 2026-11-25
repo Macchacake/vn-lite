@@ -104,7 +104,8 @@ function pick(list, text, out) {
  */
 export function looksFromCard(card) {
     const parts = [];
-    const desc = [card && card.description, card && card.personality]
+    const desc = [card && card.description, card && card.personality, card && card.scenario,
+        card && card.first_mes, card && card.mes_example]
         .filter(Boolean).join('\n').slice(0, 4000);
     if (!desc) return null;
 

@@ -66,11 +66,6 @@ function currentCharacters() {
     return out;
 }
 
-// 设置面板用：列出当前聊天里的角色名，方便逐个填英文提示词
-function knownChars() {
-    return currentCharacters().slice(0, 60).map(c => ({ name: c.name }));
-}
-
 function getCtxInfo(extra) {
     const members = currentCharacters().slice(0, 60).map(c => c.name);
     return Object.assign({
@@ -114,20 +109,24 @@ function resolveChar(name) {
     return null;
 }
 
-// ---------- 角色外观：吸收 AI 写的 [look:] 标签 ----------
-// AI 看过角色卡，它写出来的外观标签比插件瞎猜靠谱得多。
-// 用户手动改过的提示词优先级更高，不再被覆盖。
+// ---------- 角色外观：自动从剧情人设 / 柏宝书读取 ----------
+// 设置页不再提供手填入口，也不再让 LLM 现编外观。
+// 优先级靠「谁先写进来」保证：
+//   柏宝书（memory.js 同步，lookSource=memory）
+//   > 剧情里已有的 [look:] 标签（老存档兼容）
+//   > 角色卡人设 description/personality/scenario/first_mes
+//   > 当前聊天文本里提到该角色时的外貌描写
 function absorbLooks(script) {
     if (!script || !script.looks) return;
     const S = settings.get();
     if (!S.artPrompts) S.artPrompts = {};
     if (!S.lookAuto) S.lookAuto = {};
-    let changed = false;
     if (!S.lookSource) S.lookSource = {};
+    let changed = false;
     for (const [name, tags] of Object.entries(script.looks)) {
         const cur = S.artPrompts[name];
         const autoOwned = S.lookAuto[name] === true || S.lookSource[name] === 'memory' || S.lookSource[name] === 'auto';
-        if (cur && !autoOwned) continue;      // 用户自己写的，别动
+        if (cur && !autoOwned) continue;
         if (cur === tags) continue;
         S.artPrompts[name] = tags;
         S.lookAuto[name] = true;
@@ -138,106 +137,58 @@ function absorbLooks(script) {
     if (changed) settings.save();
 }
 
-// ---------- 让 AI 写角色外观标签 ----------
-async function generateLooks(onlyNames = null) {
+// 角色卡没写长相时，从最近聊天里「提到该角色名」的上下文抽外貌词。
+function storyLooks(name) {
+    if (!name) return null;
+    const parts = [];
+    try {
+        const msgs = (typeof chat !== 'undefined' && Array.isArray(chat)) ? chat.slice(-14) : [];
+        for (const m of msgs) {
+            const t = String((m && m.mes) || '');
+            let idx = 0, guard = 0;
+            while ((idx = t.indexOf(name, idx)) >= 0 && guard++ < 3) {
+                parts.push(t.slice(Math.max(0, idx - 60), idx + 240));
+                idx += name.length;
+            }
+        }
+    } catch (e) { /* chat 不可用就跳过 */ }
+    const text = parts.join('\n').slice(0, 2000);
+    return text ? looks.looksFromCard({ description: text }) : null;
+}
+
+// 同步补齐：不等 LLM，进入文游 / 追加新幕的当下就能用。
+function autoFillLooks(names) {
     const S = settings.get();
     if (!S.artPrompts) S.artPrompts = {};
     if (!S.lookAuto) S.lookAuto = {};
     if (!S.lookSource) S.lookSource = {};
-    let chars = currentCharacters().slice(0, 40);
-    if (Array.isArray(onlyNames) && onlyNames.length) {
-        const want = new Set(onlyNames);
-        chars = chars.filter(c => want.has(c.name));
-    }
-    if (!chars.length) return { ok: 0, total: 0, reason: '当前没有角色' };
+    const cards = currentCharacters().slice(0, 40);
+    const want = [...new Set([...(names || []), ...cards.map(c => c.name)])].filter(Boolean);
     let ok = 0;
-    for (const c of chars) {
-        // 用户手填的跳过；记忆自动填的允许 AI 润色覆盖（数据更全）
-        if (S.artPrompts[c.name] && S.lookAuto[c.name] !== true && S.lookSource[c.name] !== 'memory') continue;
-
-        // 第一步（同步兜底）：直接从角色卡抽外观。
-        // 关键：以前这一步全押在 LLM 上，手机端 LLM 没配好/接口一变就全军覆没，
-        // artPrompts 空 → prefetch 不画 → 满屏剪影。先把卡里写的外观落地，
-        // 立绘立刻能生成；LLM 只是后面用来「润色」，不再是唯一来源。
-        const fallback = looks.looksFromCard(c);
-        if (fallback && (!S.artPrompts[c.name] || S.lookAuto[c.name] === true || S.lookSource[c.name] === 'memory')) {
-            S.artPrompts[c.name] = fallback;
-            S.lookAuto[c.name] = true;
-            S.lookSource[c.name] = 'auto';
-            if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
-            ok++;
-        }
-
-        // 第二步（可选润色）：让 LLM 写更完整的标签；失败也不影响上一步的兜底。
-        // 新版酒馆 generateQuietPrompt 用对象参数，这里两种写法都兼容。
-        const desc = [c.description, c.personality, c.scenario].filter(Boolean).join('\n').slice(0, 1500);
-        if (!desc && fallback) continue;
-        const q = `你是 Danbooru 标签专家。根据角色设定，写一条用于生成该角色「全身立绘」的英文标签串。
-
-只输出标签本身：英文逗号分隔，一行，不要解释、不要引号、不要编号。
-顺序固定：1girl 或 1boy → 发色与发型 → 瞳色 → 体型 → 年龄感 → 服装（颜色+款式）→ 显著特征。
-不要写表情、不要写背景、不要写镜头角度、不要写画风词。
-
-角色名：${c.name}
-已有参考标签：${fallback || '（无）'}
-角色设定：
-${desc || '（这张卡没有写外观，请按名字给一个合理的日系角色外观）'}`;
-        try {
-            // LLM 可能长时间不返回；卡里已经抽到兜底时不必等它，最多等 12 秒。
-            const callLlm = (async () => {
-                try {
-                    return await generateQuietPrompt({ quietPrompt: q, quietToLoud: true, skipWIAN: true, removeReasoning: true });
-                } catch (e1) {
-                    return await generateQuietPrompt(q, true, true);  // 旧版酒馆兼容
-                }
-            })();
-            let out = fallback
-                ? await Promise.race([callLlm, new Promise(r => setTimeout(() => r(''), 12000))])
-                : await callLlm;
-            out = String(out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
-            out = out.replace(/^["'`]+|["'`]+$/g, '').replace(/^(tags?|标签)[:：]\s*/i, '').trim();
-            // 结果太短/不像标签串就丢弃，保留卡里抽出来的兜底。
-            if (out && /1girl|1boy/.test(out) && out.split(',').length >= 3) {
-                S.artPrompts[c.name] = out;
-                S.lookAuto[c.name] = true;
-                S.lookSource[c.name] = 'auto';
-                if (S.artCache && S.artCache.char) delete S.artCache.char[c.name];
-                if (!fallback) ok++;
-            }
-        } catch (e) {
-            console.warn('[VN-Lite] LLM 润色外观失败，已用角色卡兜底：' + c.name, e && e.message);
-        }
+    for (const name of want) {
+        if (S.artPrompts[name]) continue;   // 柏宝书 / 剧情标签 / 已有值都不覆盖
+        const card = cards.find(c => c.name === name) || { name };
+        const tags = looks.looksFromCard(card) || storyLooks(name);
+        if (!tags) continue;                // 没有任何外貌线索 → 不画随机立绘
+        S.artPrompts[name] = tags;
+        S.lookAuto[name] = true;
+        S.lookSource[name] = 'auto';
+        if (S.artCache && S.artCache.char) delete S.artCache.char[name];
+        ok++;
     }
-    settings.save();
-    return { ok, total: chars.length };
+    if (ok) settings.save();
+    return { ok, total: want.length };
 }
 
-// 自动补齐缺失的外观标签：没有标签就不许画立绘，否则模型会随机编人。
-// 只在开启自动生图时跑，且每个角色只跑一次（lookAuto 落盘后不会再生成）。
-const _looksInFlight = new Set();
+// 外观补齐入口：同步跑完立刻重新预生成，保证当前这一幕就能出立绘。
 function ensureLooks(names, scripts = []) {
     const S = settings.get();
     if (!(S.enabled && S.sdOn && S.autoArt)) return;
-    const need = [...new Set((names || []).filter(Boolean))].filter(n =>
-        !S.artPrompts?.[n] && !_looksInFlight.has(n));
-    if (!need.length) return;
-    need.forEach(n => _looksInFlight.add(n));
-    generateLooks(need).then((r) => {
-        need.forEach(n => _looksInFlight.delete(n));
-        if (!r || !r.ok) return;
-        const cur = settings.get();
-        if (cur.artCache && cur.artCache.char) {
-            for (const n of need) if (cur.artPrompts?.[n]) delete cur.artCache.char[n];
-        }
-        // 外观标签是异步拿到的：补完后让当前几幕重新走一次预生成。
-        for (const s of scripts) {
-            try { art.prefetch(s); } catch (e) { /* 失败不影响演出 */ }
-        }
-        console.log('[VN-Lite] 已自动补齐外观：', need.join('、'));
-    }).catch((e) => {
-        need.forEach(n => _looksInFlight.delete(n));
-        console.warn('[VN-Lite] 自动补外观失败', e);
-    });
+    const r = autoFillLooks(names);
+    if (!r.ok) return;
+    for (const s of scripts) {
+        try { art.prefetch(s); } catch (e) { /* 失败不影响演出 */ }
+    }
 }
 
 // 从剧本里收集需要立绘的角色名
@@ -295,8 +246,6 @@ function envFactory() {
         ctxInfo: getCtxInfo(),
         userName: name1,
         resolveChar,
-        knownChars,
-        generateLooks,
         sendUserMessage,
         // CG 绘画：先查缓存，再按需生成（URL/开关实时生效）
         sd: (prompt) => art.cg(prompt),

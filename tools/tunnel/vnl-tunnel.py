@@ -71,8 +71,14 @@ class Proxy(BaseHTTPRequestHandler):
     timeout = 120
 
     def log_message(self, fmt, *args):
-        # 默认日志太吵（手机每秒轮询一次），只留错误
-        pass
+        # 默认日志太吵（手机每秒轮询一次），只留错误。
+        # 排查连接问题时设 VNL_LOG=1 把每条请求写进 vnl-tunnel.log
+        if os.environ.get("VNL_LOG"):
+            try:
+                with open(os.path.join(HERE, "vnl-tunnel.log"), "a", encoding="utf-8") as f:
+                    f.write("%s %s %s\n" % (self.command, self.path, fmt % args))
+            except Exception:
+                pass
 
     # ---------- 内部 ----------
     def _deny(self, code, msg):
