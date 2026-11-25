@@ -158,6 +158,7 @@ function openTheater(items, envFactory, opts = {}) {
         mountPanel(settingsBody, {
             openGallery: () => { hideSettings(); showGallery(); },
             knownChars: env.knownChars,
+            generateLooks: env.generateLooks,
         });
         settingsMounted = true;
         settingsPage.classList.add('vnl-settings-on');

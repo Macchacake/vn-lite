@@ -99,9 +99,13 @@ function remoteUrl(rec) {
     let base = rec.base;
     const cur = String((S && S.sdUrl) || '').replace(/\/+$/, '');
     if (cur && base && base !== cur) {
-        // 只在「旧地址是隧道 / 本机地址」时迁移，避免把用户手动指向别处的图也改掉
-        const isTunnelish = /trycloudflare\.com|localhost|127\.0\.0\.1|:\d{4,5}/i.test(base);
-        if (isTunnelish) base = cur;
+        // 与 settings.js rebaseArtUrls 保持一致的保守判定：只有「同一个 origin」
+        // 或「同为隧道域名」（重启换域名但图片还在那台 ComfyUI）时才迁移。
+        // 不能用宽泛的 :端口 匹配，否则用户手动指向另一台不同端口的 ComfyUI 时，
+        // 旧图 base 会被错误改写 → 取图 404。
+        const isTunnel = (u) => /trycloudflare\.com|tailscale\.ts\.net|localhost|127\.0\.0\.1/i.test(u || '');
+        const origin = (u) => { try { return new URL(u).origin; } catch { return ''; } };
+        if (origin(base) === origin(cur) || (isTunnel(base) && isTunnel(cur))) base = cur;
     }
     if (!base) return null;
     return base + '/view?filename=' + encodeURIComponent(rec.filename) +
@@ -324,12 +328,14 @@ export function ensure(kind, key, prompt, opts = {}) {
     if (!S || !key || !prompt) return false;
     if (!S.sdOn || !S.autoArt) return false;
     if (peek(kind, key)) return false;
-    const id = kind + '|' + key;
+    // 去重键带上当前对话前缀：切到另一对话时，同名素材应能各自排队，
+    // 否则 A 对话入队未完成时 B 对话的同一素材会被误判为「已在队列」而永远不生成。
+    const id = scoped(kind + '|' + key);
     if (queued.has(id)) return false;
     queued.add(id);
     const size = opts.size || SIZE[kind] || SIZE.cg;
     queue.push({
-        kind, key, prompt,
+        kind, key, prompt, id,
         priority: opts.priority ? 1 : 0,
         opts: {
             w: size[0], h: size[1],
@@ -365,7 +371,7 @@ async function pump() {
     } catch (e) {
         console.warn('[VN-Lite] 生图异常：', e && e.message);
     } finally {
-        queued.delete(job.kind + '|' + job.key);
+        queued.delete(job.id);   // 用入队时的 id 清除，避免生成期间切对话导致 key 不匹配
         running = false;
         if (queue.length) setTimeout(pump, 120);
     }
@@ -441,11 +447,15 @@ export async function cg(prompt) {
 export function hydrateChat() {
     return localstore.hydrate(getChatKey()).then(() => {
         if (!S || !S.artCache) return;
+        // 按「当前对话 key + ::」前缀精确还原原始 key。
+        // 不能用首个 :: 切：chatKey 本身可能含 ::（如「角色::玩家」兜底 key），
+        // 那样会把原始 key 的前半段一起截掉，导致 hydrate 后舞台对不上本地图。
+        const prefix = getChatKey() === 'default' ? '' : getChatKey() + '::';
         for (const kind of ['bg', 'char', 'item', 'cg']) {
             const bucket = S.artCache[kind] || {};
             for (const [k, rec] of Object.entries(bucket)) {
                 if (!rec) continue;
-                const rawKey = k.includes('::') ? k.slice(k.indexOf('::') + 2) : k;
+                const rawKey = prefix && k.startsWith(prefix) ? k.slice(prefix.length) : k;
                 emit(kind, rawKey, viewUrl(rec));
             }
         }

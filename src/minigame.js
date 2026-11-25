@@ -52,12 +52,20 @@ function renderChoices(container, opts, cfg) {
                 return;
             }
             // 第二次点同一个：确认发送
+            // sendUserMessage 返回 false 表示被连点锁挡下（上一次生成还没结束），
+            // 此时不能假装「已发送」然后翻页，否则玩家的行动被静默吞掉且无法重试。
+            if (cfg.send && cfg.sendUserMessage) {
+                let ok = false;
+                try { ok = cfg.sendUserMessage(opt) !== false; } catch (err) { console.warn('[VN-Lite] 发送选择失败', err); }
+                if (!ok) {
+                    hint.textContent = '上一段剧情还没结束，请稍后再点一次确认';
+                    disarm();
+                    return;   // 保持未发送状态，允许重试
+                }
+            }
             picked = true;
             btn.classList.add('picked');
             hint.textContent = willSend ? '已发送，等待剧情继续…' : '继续…';
-            if (cfg.send && cfg.sendUserMessage) {
-                try { cfg.sendUserMessage(opt); } catch (err) { console.warn('[VN-Lite] 发送选择失败', err); }
-            }
             setTimeout(() => cfg.onPick && cfg.onPick(opt), 350);
         });
         wrap.appendChild(btn);
@@ -161,7 +169,9 @@ function renderDice(container, cfg) {
                     `<div class="vnl-dice-verdict ${ok ? 'ok' : 'no'}">${ok ? '✔ ' : '✘ '}${esc(ok ? (cfg.okText || '成功！') : (cfg.failText || '失败…'))}</div>`;
                 resultShown = true;
                 rollBtn.textContent = '▶ 继续';
-                if (cfg.send && cfg.sendUserMessage) {
+                // 骰子滚动期间玩家可能已退出剧场/切换对话，此时 interval 仍在跑；
+                // 有 alive() 就先问舞台是否还活着，避免把结果发到别的对话。
+                if (cfg.send && cfg.sendUserMessage && (!cfg.alive || cfg.alive())) {
                     try { cfg.sendUserMessage(`（掷骰 ${n}d${faces}=${total}，目标≥${target}：${ok ? '成功' : '失败'}）`); } catch (err) { console.warn('[VN-Lite] 发送骰子结果失败', err); }
                 }
             }

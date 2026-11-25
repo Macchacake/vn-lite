@@ -96,11 +96,18 @@ export function hydrate(chatId) {
             for (const u of urlMap.values()) { try { URL.revokeObjectURL(u); } catch (e) { /* ignore */ } }
             urlMap.clear();
             if (!Array.isArray(rows)) return 0;
-            // 只保留最近 N 张
-            const keep = rows.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, MAX_PER_CHAT);
+            // 只保留最近 N 张，并把超限的记录从 IndexedDB 真正删掉，
+            // 否则每次 hydrate 都要 getAll 全部 blob 到内存，长期会持续膨胀。
+            const sorted = rows.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+            const keep = sorted.slice(0, MAX_PER_CHAT);
+            const drop = sorted.slice(MAX_PER_CHAT).map(r => r && r.id).filter(Boolean);
             for (const r of keep) {
                 if (!r || !r.blob || !r.id) continue;
                 try { urlMap.set(r.id, URL.createObjectURL(r.blob)); } catch (e) { /* ignore */ }
+            }
+            if (drop.length) {
+                txRun('readwrite', os => { for (const id of drop) os.delete(id); return drop.length; })
+                    .catch(() => {});
             }
             return keep.length;
         })
@@ -126,6 +133,13 @@ export function remove(id) {
 }
 
 export function clearChat(chatId) {
+    // 清掉正在下载的同对话 id：否则清缓存后立即重新生成同一 key 的图，
+    // saveFromUrl 会因 saving.has(id) 直接跳过，本地永远停在旧图。
+    // id 形如「chatKey::kind|key」，按对话前缀移除即可。
+    if (chatId) {
+        const p = chatId + '::';
+        for (const id of Array.from(saving)) if (id === chatId || id.startsWith(p)) saving.delete(id);
+    }
     return txRun('readonly', os => os.index('chatId').getAllKeys(IDBKeyRange.only(chatId)))
         .then(keys => {
             if (Array.isArray(keys)) for (const k of keys) {

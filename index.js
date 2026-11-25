@@ -256,10 +256,12 @@ function scriptCharNames(script) {
 // 之前只模拟点 #send_but，在部分手机酒馆版本上按钮 id 不同 / 被遮挡 / 事件没绑上，
 // 结果选项点了没反应、也不发请求。这里优先直接调函数，模拟点按钮只作为兜底。
 let _sending = false;
+// 返回 true 表示「确实发起了一次发送」，false 表示被连点保护挡下 / 无发送入口。
+// minigame.js 二次确认后据此决定是否翻页，避免锁冲突时把玩家的行动静默吞掉。
 function sendUserMessage(text) {
     const ta = document.querySelector('#send_textarea');
-    if (!ta) return;
-    if (_sending) return;              // 连点保护：一次选择只发一条
+    if (!ta) return false;
+    if (_sending) return false;        // 连点保护：一次选择只发一条
     _sending = true;
     ta.value = text;
     ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -267,20 +269,23 @@ function sendUserMessage(text) {
     try {
         const sendFn = ST.sendTextareaMessage;
         if (typeof sendFn === 'function') {
-            const r = sendFn();                // 内部 await Generate()，真正发 AI 请求
-            if (r && typeof r.catch === 'function') r.catch(e => console.warn('[VN-Lite] AI 请求失败', e));
+            // 先标记已发送再调用：sendFn 内部可能「请求已发出、后续处理才抛错」，
+            // 若此时回退到 btn.click() 会造成同一次选择发两条 AI 请求。
             sent = true;
+            const r = sendFn();            // 内部 await Generate()，真正发 AI 请求
+            if (r && typeof r.catch === 'function') r.catch(e => console.warn('[VN-Lite] AI 请求失败', e));
         }
     } catch (e) {
-        console.warn('[VN-Lite] sendTextareaMessage 不可用，回退按钮', e);
+        console.warn('[VN-Lite] sendTextareaMessage 调用异常', e);
     }
     if (!sent) {
         const btn = document.querySelector('#sendbut') || document.querySelector('#send_but');
         if (btn) btn.click();
-        else { console.warn('[VN-Lite] 找不到发送按钮'); _sending = false; return; }
+        else { console.warn('[VN-Lite] 找不到发送按钮'); _sending = false; return false; }
     }
     // 生成结束后由 GENERATION_ENDED 复位；这里留一个较长兜底，防止异常卡死
     setTimeout(() => { _sending = false; }, 30000);
+    return true;
 }
 
 // ---------- 环境工厂（每次挂载取最新设置） ----------
@@ -306,14 +311,17 @@ function envFactory() {
 let generating = false;
 
 // ---------- 剧场同层追加（不退出剧场继续剧情） ----------
-let _appendedSig = '';
+let _appendedKey = '';   // 已追加过的消息稳定 key（索引+swipe），用于去重
 
-// 找出最后一条 AI 消息（含它的唯一签名）
+// 找出最后一条 AI 消息：
+// - key：稳定标识（消息索引 + swipe_id），流式期间不变，用于「是否已追加」去重
+// - fingerprint：含内容长度，流式逐字增长时每次都变，用于判断生成是否已结束
 function lastAiMsg() {
     for (let i = chat.length - 1; i >= 0; i--) {
         const m = chat[i];
         if (m && !m.is_user && m.mes && m.mes.trim()) {
-            return { msg: m, id: i, sig: i + ':' + (m.swipe_id ?? 0) + ':' + m.mes.length };
+            const stem = i + ':' + (m.swipe_id ?? 0);
+            return { msg: m, id: i, key: stem, fingerprint: stem + ':' + m.mes.length };
         }
     }
     return null;
@@ -323,8 +331,8 @@ function lastAiMsg() {
 function appendLatestToTheater() {
     const hit = lastAiMsg();
     if (!hit) return false;
-    if (hit.sig === _appendedSig) return false; // 同一条消息（流式/重复事件）不重复追加
-    _appendedSig = hit.sig;
+    if (hit.key === _appendedKey) return false; // 同一条消息（流式/重复事件）不重复追加
+    _appendedKey = hit.key;
     const S = settings.get();
     const script = parseMessage(hit.msg.mes, getCtxInfo({ autoChoice: !!S.autoChoice }));
     if (!script || !script.usable) return false;
@@ -337,16 +345,27 @@ function appendLatestToTheater() {
 
 // 兜底轮询：手机端酒馆的 GENERATION_ENDED / MESSAGE_RECEIVED 偶尔漏发，
 // 只要剧场开着就每秒对一次 chat，保证「点了选项一定会往下走」。
+// 关键：只在「消息内容连续两次轮询都没变」时才当成一条完整回复追加，
+// 否则流式生成时每增长一个字就 fingerprint 变化，会把同一条半截消息
+// 反复追加成多幕。这样也不依赖事件是否漏发。
 let _watchTimer = null;
+let _watchFp = '';
 function startWatcher() {
     if (_watchTimer) return;
+    _watchFp = '';
     _watchTimer = setInterval(() => {
         if (!isOpen()) { stopWatcher(); return; }
-        try { appendLatestToTheater(); } catch (e) { /* 忽略单次异常 */ }
+        try {
+            const hit = lastAiMsg();
+            if (!hit) return;
+            if (hit.fingerprint !== _watchFp) { _watchFp = hit.fingerprint; return; } // 还在生成，等下一次
+            appendLatestToTheater();
+        } catch (e) { /* 忽略单次异常 */ }
     }, 1000);
 }
 function stopWatcher() {
     if (_watchTimer) { clearInterval(_watchTimer); _watchTimer = null; }
+    _watchFp = '';
 }
 
 // ---------- 文游模式入口 ----------
@@ -376,7 +395,7 @@ function enterVnMode() {
     const items = buildTheaterItems();
     // 进剧场时最后一条已经在 items 里演过了，先记下签名，避免兜底轮询又追加一遍
     const hit = lastAiMsg();
-    _appendedSig = hit ? hit.sig : '';
+    _appendedKey = hit ? hit.key : '';
     openTheater(items, envFactory, { startAtEnd: true });
     startWatcher();
 }
@@ -503,7 +522,7 @@ async function init() {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         closeTheater();
         stopWatcher();
-        _appendedSig = '';
+        _appendedKey = '';
         resetLearned();      // 换聊天了，学到的角色名清空，避免串味
         syncChatKey();       // 换对话 → 切到这段对话自己的本地图集/缓存
     });

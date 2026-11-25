@@ -8,6 +8,7 @@ let chatKey = '';
 
 export function setChatKey(key) { chatKey = String(key || ''); }
 export function getChatKey() { return chatKey || 'default'; }
+export function chatPrefix() { return chatKey ? chatKey + '::' : ''; }
 
 // 把对话 key 拼进素材 key，让不同对话的缓存/图集互不干扰。
 export function scoped(baseKey) {
@@ -16,9 +17,11 @@ export function scoped(baseKey) {
     return k === 'default' ? String(baseKey) : k + '::' + String(baseKey);
 }
 
-// 从带前缀的 key 里取回原始 key（图集显示用）
+// 从带前缀的 key 里取回原始 key。
+// 按当前 chatKey 前缀精确剥离：chatKey 自身可能含 ::（如「角色::玩家」兜底 key），
+// 用首个 :: 切会把原始 key 的前半段吃掉。
 export function unscope(scopedKey) {
     const s = String(scopedKey || '');
-    const i = s.indexOf('::');
-    return i >= 0 ? s.slice(i + 2) : s;
+    const p = chatPrefix();
+    return p && s.startsWith(p) ? s.slice(p.length) : s;
 }

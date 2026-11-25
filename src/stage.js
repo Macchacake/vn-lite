@@ -363,6 +363,7 @@ function createStage(script, env) {
                 okText: seg.okText, failText: seg.failText,
                 send: S.sendChoice,
                 sendUserMessage: env.sendUserMessage,
+                alive: () => !state.disposed,
                 onDone: () => { state.awaiting = !!(S.sendChoice && env.sendUserMessage); advance(); },
             });
             state.interactive = true;

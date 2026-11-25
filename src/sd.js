@@ -8,8 +8,19 @@
 
 const CLIENT_ID = 'vn-lite-' + Math.random().toString(36).slice(2, 10);
 const _modelCache = { list: null, base: null, ts: 0 };
-const _imgCache = new Map();      // base::prompt -> objectURL
+const IMG_CACHE_MAX = 120;        // 内存结果缓存上限，防止长期累积
+const _imgCache = new Map();      // key -> {url, filename, base, ...}
 const _lastGood = { base: null, ts: 0 };
+
+function cacheSet(key, value) {
+    _imgCache.set(key, value);
+    if (_imgCache.size > IMG_CACHE_MAX) {
+        // Map 按插入顺序迭代，删最早的几条（简单 FIFO 淘汰）
+        const drop = _imgCache.size - IMG_CACHE_MAX;
+        let i = 0;
+        for (const k of _imgCache.keys()) { if (i++ >= drop) break; _imgCache.delete(k); }
+    }
+}
 
 // ---------- 地址规范化 ----------
 function normalizeBase(u) {
@@ -249,7 +260,11 @@ function buildWorkflow(model, prompt, opts = {}, matte = null) {
 // ---------- 单个地址上的完整生成流程 ----------
 async function tryGenerateOn(base, prompt, S, opts = {}) {
     const key = base + '::' + prompt + '::' + (opts.w || 0) + 'x' + (opts.h || 0) + (opts.transparent ? '|a' + (opts.keyColor || 'green') : '') + '|s' + (opts.seed >>> 0 || 0);
-    if (_imgCache.has(key)) return { url: _imgCache.get(key) };
+    // 命中时返回「完整的」结果对象（含 base/filename/subfolder/type），
+    // 不能只返回 {url}：调用方 art.js store() 要靠 filename/base 建素材缓存、
+    // 下载到本地、发图集事件。旧版只回 url 会让跨对话命中缓存时误判为失败、
+    // 反复入队、舞台立绘/背景不更新。
+    if (_imgCache.has(key)) return _imgCache.get(key);
     try {
         const models = await listModels(base);
         const model = S.sdModel && models.includes(S.sdModel) ? S.sdModel : pickModel(models);
@@ -284,10 +299,11 @@ async function tryGenerateOn(base, prompt, S, opts = {}) {
                 const url = base + '/view?filename=' + encodeURIComponent(img.filename) +
                     '&subfolder=' + encodeURIComponent(sub) +
                     '&type=' + encodeURIComponent(typ);
-                _imgCache.set(key, url);
+                const result = { url, filename: img.filename, subfolder: sub, type: typ, base, model };
+                cacheSet(key, result);
                 _lastGood.base = base;
                 _lastGood.ts = Date.now();
-                return { url, filename: img.filename, subfolder: sub, type: typ, base, model };
+                return result;
             }
             if (hist[prompt_id].status?.completed) throw new Error('gen failed');
         }

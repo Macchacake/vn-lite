@@ -307,9 +307,7 @@ function expandLongSegments(script, max) {
     for (const seg of script.segments) {
         if ((seg.t === 'narr' || seg.t === 'say' || seg.t === 'inner') && seg.text && seg.text.length > max) {
             for (const piece of splitText(seg.text, max)) {
-                out.push(seg.t === 'narr'
-                    ? Object.assign({}, seg, { text: piece })
-                    : Object.assign({}, seg, { text: piece }));
+                out.push(Object.assign({}, seg, { text: piece }));
             }
         } else {
             out.push(seg);
